@@ -1,19 +1,68 @@
-# ABOUTME: Loads the tokenizer vocab file and exposes token id <-> string lookups.
-# ABOUTME: Used by the grammar/state machine to figure out which token ids are valid.
+from pathlib import Path
+from pydantic import BaseModel, PrivateAttr, model_validator, ValidationError
+import json
 
-"""
-TODO:
-    - Given the path returned by Small_LLM_Model.get_path_to_vocab_file(),
-      parse the vocab file (likely a JSON mapping token string -> token id
-      for a BPE tokenizer) into:
-        * id_to_token: dict[int, str]
-        * token_to_id: dict[str, int]
-    - Remember: tokens may include the "Ġ" leading-space marker -- decide
-      how you want to normalize/interpret that when comparing token strings
-      against the literal text you're trying to match (e.g. a function name,
-      a JSON key, punctuation like '{' ':' ',' '"').
-    - Think about what lookup shape will make the grammar's job fast:
-      e.g. do you want a way to quickly get "all tokens whose string is a
-      valid continuation of a given partial match", rather than scanning
-      the whole vocab from scratch at every generation step?
-"""
+
+class VocabError(Exception):
+    pass
+
+
+class TokenVocab(BaseModel):
+    raw: dict[str, int]
+    _id_to_token: dict[int, str] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="after")
+    def build(self):
+        for token, id in self.raw.items():
+            if id in self._id_to_token:
+                raise ValueError(f"duplicate token: {token!r}")
+            else:
+                self._id_to_token[id] = token
+        return self
+
+    @classmethod
+    def load(cls, path: str | Path) -> "TokenVocab":
+        try:
+            with open(path, "r") as file:
+                text = file.read()
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError as e:
+                    raise VocabError(f"{path} is not valid JSON: {e}") from e
+
+                if not isinstance(parsed, dict):
+                    raise VocabError(
+                        f"{path} must contain a JSON array,"
+                        + f" got {type(parsed).__name__}"
+                    )
+                try:
+                    return cls(raw=parsed)
+                except ValidationError as e:
+                    raise VocabError(
+                        f"{path} does not match the expected schema: {e}"
+                    ) from e
+
+        except (OSError, UnicodeDecodeError) as e:
+            raise VocabError(f"could not read {path}: {e}") from e
+
+    def token_string(self, token_id: int) -> str:
+        try:
+            return self._id_to_token[token_id]
+        except KeyError as e:
+            raise VocabError(f"unknown token name: {token_id!r}") from e
+
+    def token_text(self, token_id: int) -> str:
+        raw = self.token_string(token_id)
+        if raw.startswith("Ġ"):
+            raw = raw.removeprefix("Ġ")
+            raw = " " + raw
+        return raw
+
+    def id_of(self, raw_token: str) -> int | None:
+        if raw_token in self.raw:
+            return self.raw[raw_token]
+        else:
+            return None
+
+    def __len__(self) -> int:
+        return len(self._id_to_token)
