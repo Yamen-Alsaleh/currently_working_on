@@ -1,6 +1,3 @@
-# ABOUTME: State machine that tracks position within the JSON structure being
-# ABOUTME: generated, and computes the set of valid next token ids at each step.
-
 """
 This is the core of the "constrained decoding" requirement.
 
@@ -29,3 +26,122 @@ TODO:
       "literal/enum matching" sub-grammar (keys, function names, string
       values) used for "prompt", "name", string-typed parameters, etc.
 """
+
+from enum import Enum
+from pydantic import BaseModel, Field
+from schema import FunctionRegistry
+from vocab import TokenVocab
+
+
+class Phase(Enum):
+    EXPECT_OPEN_BRACE = 1
+    EXPECT_KEY = 2
+    EXPECT_COLON = 3
+    EMIT_KNOWN_LITERAL = 4
+    EXPECT_ENUM_VALUE = 5
+    EXPECT_FREE_STRING_VALUE = 6
+    EXPECT_FREE_NUMBER_VALUE = 7
+    EXPECT_FREE_BOOLEAN_VALUE = 8
+    EXPECT_COMMA_OR_CLOSE = 9
+    DONE = 10
+
+
+class GrammarError(Exception):
+    pass
+
+
+class GenerationState(BaseModel):
+    prompt: str
+    registry: FunctionRegistry
+    phase: Phase
+    candidate_menu: list[str] = Field(default_factory=list)
+    progress: str
+    chosen_function_name: str | None
+    collected_parameters: dict[str, int | str | bool] = Field(
+        default_factory=dict
+    )
+    top_level_key: str | None
+    current_parameter_name: str | None
+
+    def _prefix_match_token_ids(
+        self, vocab, candidates: list[str]
+    ) -> set[int]:
+        survived_candidate = [
+            cand for cand in candidates if cand.startswith(self.progress)
+        ]
+        remaining_suffix = [
+            cand.removeprefix(self.progress) for cand in survived_candidate
+        ]
+
+    def valid_token_ids(self, vocab: TokenVocab) -> set[int]:
+        if self.phase == Phase.EXPECT_OPEN_BRACE:
+            brace_id = vocab.id_of("{")
+            if brace_id is None:
+                raise GrammarError("'{' not found in vocab")
+            return {brace_id}
+        elif self.phase == Phase.EXPECT_COLON:
+            colon_id = vocab.id_of(":")
+            if colon_id is None:
+                raise GrammarError("':' not found in vocab")
+            return {colon_id}
+
+    def advance(self, token_id: int, vocab: TokenVocab) -> None:
+        if self.phase == Phase.EXPECT_OPEN_BRACE:
+            if self.top_level_key == "parameters":
+                self.phase = Phase.EXPECT_KEY
+                function_def = self.registry.get(self.chosen_function_name)
+                param_names = function_def.required_parameter_names()
+                self.candidate_menu = param_names
+                self.progress = ""
+                return
+            self.phase = Phase.EXPECT_KEY
+            self.candidate_menu = ["prompt", "name", "parameters"]
+            self.progress = ""
+            return
+        elif self.phase == Phase.EXPECT_COLON:
+            if self.top_level_key == "prompt":
+                self.phase = Phase.EMIT_KNOWN_LITERAL
+            elif self.top_level_key == "name":
+                self.phase = Phase.EXPECT_ENUM_VALUE
+            elif self.top_level_key == "parameters":
+                if self.current_parameter_name is None:
+                    self.phase = Phase.EXPECT_OPEN_BRACE
+                else:
+                    param_type = self.registry.get(
+                        self.chosen_function_name
+                    ).parameter_type(self.current_parameter_name)
+                    if param_type == "string":
+                        self.phase = Phase.EXPECT_FREE_STRING_VALUE
+                    elif param_type == "number":
+                        self.phase = Phase.EXPECT_FREE_NUMBER_VALUE
+                    else:
+                        self.phase = Phase.EXPECT_FREE_BOOLEAN_VALUE
+
+    def is_done(self) -> bool:
+        return self.phase == Phase.DONE
+
+    def result(self) -> dict:
+        if self.is_done():
+            return {
+                "prompt": self.prompt,
+                "name": self.chosen_function_name,
+                "parameters": self.collected_parameters,
+            }
+        else:
+            raise GrammarError
+
+    @classmethod
+    def start(
+        cls, prompt: str, registry: FunctionRegistry
+    ) -> "GenerationState":
+        return cls(
+            prompt=prompt,
+            registry=registry,
+            phase=Phase.EXPECT_OPEN_BRACE,
+            candidate_menu=[],
+            progress="",
+            chosen_function_name=None,
+            collected_parameters={},
+            top_level_key=None,
+            current_parameter_name=None,
+        )
