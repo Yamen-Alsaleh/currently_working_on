@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Iterator
 from pydantic import BaseModel, PrivateAttr, model_validator, ValidationError
 import json
 
@@ -66,3 +67,6 @@ class TokenVocab(BaseModel):
 
     def __len__(self) -> int:
         return len(self._id_to_token)
+
+    def __iter__(self) -> Iterator[tuple[int, str]]:
+        return iter(self._id_to_token.items())
