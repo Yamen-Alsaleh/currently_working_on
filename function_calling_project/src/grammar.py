@@ -99,6 +99,8 @@ class GenerationState(BaseModel):
             return self._prefix_match_token_ids(vocab, self.candidate_menu)
         elif self.phase == Phase.EXPECT_ENUM_VALUE:
             return self._prefix_match_token_ids(vocab, self.candidate_menu)
+        elif self.phase == Phase.EMIT_KNOWN_LITERAL:
+            return self._prefix_match_token_ids(vocab, [self.prompt])
 
     def advance(self, token_id: int, vocab: TokenVocab) -> None:
         if self.phase == Phase.EXPECT_OPEN_BRACE:
@@ -118,6 +120,8 @@ class GenerationState(BaseModel):
                 self.phase = Phase.EMIT_KNOWN_LITERAL
             elif self.top_level_key == "name":
                 self.phase = Phase.EXPECT_ENUM_VALUE
+                self.candidate_menu = self.registry.function_names()
+                self.progress = ""
             elif self.top_level_key == "parameters":
                 if self.current_parameter_name is None:
                     self.phase = Phase.EXPECT_OPEN_BRACE
@@ -132,28 +136,31 @@ class GenerationState(BaseModel):
                     else:
                         self.phase = Phase.EXPECT_FREE_BOOLEAN_VALUE
         elif self.phase == Phase.EXPECT_KEY:
-            if self.top_level_key == "parameters":
-                self.progress = self.progress + vocab.token_text(token_id)
-                quoted_candidates = [
-                    f'"{cand}"' for cand in self.candidate_menu
-                ]
-                if self.progress in quoted_candidates:
-                    self.progress = self.progress.removeprefix('"')
-                    self.progress = self.progress.removesuffix('"')
+            self.progress = self.progress + vocab.token_text(token_id)
+            quoted_candidates = [f'"{cand}"' for cand in self.candidate_menu]
+            if self.progress in quoted_candidates:
+                self.progress = self.progress.removeprefix('"')
+                self.progress = self.progress.removesuffix('"')
+                if self.top_level_key == "parameters":
                     self.current_parameter_name = self.progress
-                    self.phase = Phase.EXPECT_COLON
-                    self.progress = ""
-            else:
-                self.progress = self.progress + vocab.token_text(token_id)
-                quoted_candidates = [
-                    f'"{cand}"' for cand in self.candidate_menu
-                ]
-                if self.progress in quoted_candidates:
-                    self.progress = self.progress.removeprefix('"')
-                    self.progress = self.progress.removesuffix('"')
+                else:
                     self.top_level_key = self.progress
-                    self.phase = Phase.EXPECT_COLON
-                    self.progress = ""
+                self.phase = Phase.EXPECT_COLON
+                self.progress = ""
+        elif self.phase == Phase.EXPECT_ENUM_VALUE:
+            self.progress = self.progress + vocab.token_text((token_id))
+            quoted_candidates = [f'"{cand}"' for cand in self.candidate_menu]
+            if self.progress in quoted_candidates:
+                self.progress = self.progress.removeprefix('"')
+                self.progress = self.progress.removesuffix('"')
+                self.chosen_function_name = self.progress
+                self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+                self.progress = ""
+        elif self.phase == Phase.EMIT_KNOWN_LITERAL:
+            self.progress = self.progress + vocab.token_text(token_id)
+            if self.progress == '"' + self.prompt + '"':
+                self.progress = ""
+                self.phase = Phase.EXPECT_COMMA_OR_CLOSE
 
     def is_done(self) -> bool:
         return self.phase == Phase.DONE
