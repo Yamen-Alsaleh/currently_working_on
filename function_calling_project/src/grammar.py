@@ -84,6 +84,34 @@ class GenerationState(BaseModel):
         }
         return result
 
+    def _all_required_parameters_collected(self) -> bool:
+        required = self.registry.get(
+            self.chosen_function_name
+        ).required_parameter_names()
+        return set(self.collected_parameters.keys()) == set(required)
+
+    def _is_valid_number_prefix(self, candidate: str) -> bool:
+        if candidate == "":
+            return False
+        if candidate.__contains__("-") or candidate.__contains__("."):
+            count_dot = 0
+            count = 0
+            for char in candidate:
+                if char == "-":
+                    count += 1
+                elif char == ".":
+                    count_dot += 1
+            if (
+                (candidate.__contains__("-") and candidate[0] != "-")
+                or count > 1
+                or count_dot > 1
+            ):
+                return False
+        for char in candidate:
+            if char not in "0123456789.-":
+                return False
+        return True
+
     def valid_token_ids(self, vocab: TokenVocab) -> set[int]:
         if self.phase == Phase.EXPECT_OPEN_BRACE:
             brace_id = vocab.id_of("{")
@@ -101,6 +129,50 @@ class GenerationState(BaseModel):
             return self._prefix_match_token_ids(vocab, self.candidate_menu)
         elif self.phase == Phase.EMIT_KNOWN_LITERAL:
             return self._prefix_match_token_ids(vocab, [self.prompt])
+        elif self.phase == Phase.EXPECT_COMMA_OR_CLOSE:
+            if (
+                self.top_level_key == "parameters"
+                and self.current_parameter_name is not None
+            ):
+                if self._all_required_parameters_collected():
+                    close_brace_id = vocab.id_of("}")
+                    if close_brace_id is None:
+                        raise GrammarError("'}' not found in vocab")
+                    return {close_brace_id}
+                else:
+                    comma_id = vocab.id_of(",")
+                    if comma_id is None:
+                        raise GrammarError("',' is not found in vocab")
+                    return {comma_id}
+
+            elif (
+                self.top_level_key == "parameters"
+                and self.current_parameter_name is None
+            ):
+                close_brace_id = vocab.id_of("}")
+                if close_brace_id is None:
+                    raise GrammarError("'}' not found in vocab")
+                return {close_brace_id}
+            else:
+                comma_id = vocab.id_of(",")
+                if comma_id is None:
+                    raise GrammarError("',' is not found in vocab")
+                return {comma_id}
+        elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
+            forbidden_characters = ['"', "\\", "\n"]
+            valid_token_ids = set()
+            for token_id, _ in vocab:
+                token_text = vocab.token_text(token_id)
+                if (
+                    not any(
+                        char in token_text for char in forbidden_characters
+                    )
+                    or token_text == '"'
+                ):
+                    valid_token_ids.add(token_id)
+            if not valid_token_ids:
+                raise GrammarError("no valid characters found!")
+            return valid_token_ids
 
     def advance(self, token_id: int, vocab: TokenVocab) -> None:
         if self.phase == Phase.EXPECT_OPEN_BRACE:
@@ -135,6 +207,7 @@ class GenerationState(BaseModel):
                         self.phase = Phase.EXPECT_FREE_NUMBER_VALUE
                     else:
                         self.phase = Phase.EXPECT_FREE_BOOLEAN_VALUE
+            return
         elif self.phase == Phase.EXPECT_KEY:
             self.progress = self.progress + vocab.token_text(token_id)
             quoted_candidates = [f'"{cand}"' for cand in self.candidate_menu]
@@ -147,6 +220,7 @@ class GenerationState(BaseModel):
                     self.top_level_key = self.progress
                 self.phase = Phase.EXPECT_COLON
                 self.progress = ""
+            return
         elif self.phase == Phase.EXPECT_ENUM_VALUE:
             self.progress = self.progress + vocab.token_text((token_id))
             quoted_candidates = [f'"{cand}"' for cand in self.candidate_menu]
@@ -156,11 +230,52 @@ class GenerationState(BaseModel):
                 self.chosen_function_name = self.progress
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
                 self.progress = ""
+            return
         elif self.phase == Phase.EMIT_KNOWN_LITERAL:
             self.progress = self.progress + vocab.token_text(token_id)
             if self.progress == '"' + self.prompt + '"':
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+            return
+        elif self.phase == Phase.EXPECT_COMMA_OR_CLOSE:
+            if (
+                self.top_level_key == "parameters"
+                and self.current_parameter_name is not None
+            ):
+                if self._all_required_parameters_collected():
+                    self.current_parameter_name = None
+                else:
+                    next_param = None
+                    for name in self.registry.get(
+                        self.chosen_function_name
+                    ).required_parameter_names():
+                        if name not in self.collected_parameters:
+                            next_param = name
+                            break
+                    self.candidate_menu = [next_param]
+                    self.phase = Phase.EXPECT_KEY
+                    self.progress = ""
+            elif self.top_level_key == "prompt":
+                self.candidate_menu = ["name"]
+                self.phase = Phase.EXPECT_KEY
+                self.progress = ""
+            elif self.top_level_key == "name":
+                self.candidate_menu = ["parameters"]
+                self.phase = Phase.EXPECT_KEY
+                self.progress = ""
+            elif self.top_level_key == "parameters":
+                self.phase = Phase.DONE
+            return
+        elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
+            if vocab.token_text(token_id) == '"':
+                self.collected_parameters[self.current_parameter_name] = (
+                    self.progress
+                )
+                self.progress = ""
+                self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+            else:
+                self.progress = self.progress + vocab.token_text(token_id)
+            return
 
     def is_done(self) -> bool:
         return self.phase == Phase.DONE
