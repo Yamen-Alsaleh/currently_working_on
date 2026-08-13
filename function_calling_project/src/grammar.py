@@ -144,7 +144,6 @@ class GenerationState(BaseModel):
                     if comma_id is None:
                         raise GrammarError("',' is not found in vocab")
                     return {comma_id}
-
             elif (
                 self.top_level_key == "parameters"
                 and self.current_parameter_name is None
@@ -170,6 +169,28 @@ class GenerationState(BaseModel):
                     or token_text == '"'
                 ):
                     valid_token_ids.add(token_id)
+            if not valid_token_ids:
+                raise GrammarError("no valid characters found!")
+            return valid_token_ids
+        elif self.phase == Phase.EXPECT_FREE_NUMBER_VALUE:
+            valid_token_ids = set()
+            for token_id, _ in vocab:
+                token_text = vocab.token_text(token_id)
+                if self._is_valid_number_prefix(
+                    self.progress + vocab.token_text(token_id)
+                ):
+                    valid_token_ids.add(token_id)
+                elif self.progress != "":
+                    if (
+                        vocab.token_text(token_id) == "}"
+                        and self._all_required_parameters_collected()
+                    ):
+                        valid_token_ids.add(token_id)
+                    elif (
+                        vocab.token_text(token_id) == ","
+                        and not self._all_required_parameters_collected()
+                    ):
+                        valid_token_ids.add(token_id)
             if not valid_token_ids:
                 raise GrammarError("no valid characters found!")
             return valid_token_ids
@@ -273,6 +294,23 @@ class GenerationState(BaseModel):
                 )
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+            else:
+                self.progress = self.progress + vocab.token_text(token_id)
+            return
+        elif self.phase == Phase.EXPECT_FREE_NUMBER_VALUE:
+            if vocab.token_text(token_id) in ",}":
+                if "." in self.progress:
+                    self.collected_parameters[self.current_parameter_name] = (
+                        float(self.progress)
+                    )
+                    self.progress = ""
+                    self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+                else:
+                    self.collected_parameters[self.current_parameter_name] = (
+                        int(self.progress)
+                    )
+                    self.progress = ""
+                    self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             else:
                 self.progress = self.progress + vocab.token_text(token_id)
             return
