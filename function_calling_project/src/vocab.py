@@ -11,14 +11,25 @@ class VocabError(Exception):
 class TokenVocab(BaseModel):
     raw: dict[str, int]
     _id_to_token: dict[int, str] = PrivateAttr(default_factory=dict)
+    _by_first_char: dict[str, list[int]] = PrivateAttr(default_factory=dict)
+    _string_value_ids_cache: set[int] | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def build(self):
+        self._id_to_token = {}
         for token, id in self.raw.items():
             if id in self._id_to_token:
                 raise ValueError(f"duplicate token: {token!r}")
             else:
                 self._id_to_token[id] = token
+
+        self._by_first_char = {}
+        for token_id in self._id_to_token:
+            text = self.token_text(token_id)
+            if text == "":
+                continue
+            first = text[0]
+            self._by_first_char.setdefault(first, []).append(token_id)
         return self
 
     @classmethod
@@ -45,6 +56,21 @@ class TokenVocab(BaseModel):
 
         except (OSError, UnicodeDecodeError) as e:
             raise VocabError(f"could not read {path}: {e}") from e
+
+    def ids_starting_with(self, char: str) -> list[int]:
+        return self._by_first_char.get(char, [])
+
+    def string_value_token_ids(self) -> set[int]:
+        if self._string_value_ids_cache is not None:
+            return self._string_value_ids_cache
+        forbidden = ('"', "\\", "\n")
+        result = set()
+        for token_id, _ in self:
+            text = self.token_text(token_id)
+            if text == '"' or not any(ch in text for ch in forbidden):
+                result.add(token_id)
+        self._string_value_ids_cache = result
+        return result
 
     def token_string(self, token_id: int) -> str:
         try:

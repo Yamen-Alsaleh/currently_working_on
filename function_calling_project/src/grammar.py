@@ -64,23 +64,29 @@ class GenerationState(BaseModel):
     current_parameter_name: str | None
 
     def _prefix_match_token_ids(
-        self, vocab: TokenVocab, candidates: list[str]
+        self, vocab: TokenVocab, candidates: list[str], quote: bool = True
     ) -> set[int]:
-        quoted_candidates = [f'"{cand}"' for cand in candidates]
+        if quote:
+            target_candidates = [f'"{cand}"' for cand in candidates]
+        else:
+            target_candidates = candidates
         survived_candidate = [
             cand
-            for cand in quoted_candidates
+            for cand in target_candidates
             if cand.startswith(self.progress)
         ]
         remaining_suffix = [
             cand.removeprefix(self.progress) for cand in survived_candidate
         ]
+        first_chars = {suffix[0] for suffix in remaining_suffix if suffix}
+        candidate_ids: set[int] = set()
+        for char in first_chars:
+            candidate_ids.update(vocab.ids_starting_with(char))
         result = {
-            id
-            for id, _ in vocab
+            token_id
+            for token_id in candidate_ids
             for suffix in remaining_suffix
-            if suffix.startswith(vocab.token_text(id))
-            and vocab.token_text(id) != ""
+            if suffix.startswith(vocab.token_text(token_id))
         }
         return result
 
@@ -158,42 +164,41 @@ class GenerationState(BaseModel):
                     raise GrammarError("',' is not found in vocab")
                 return {comma_id}
         elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
-            forbidden_characters = ['"', "\\", "\n"]
-            valid_token_ids = set()
-            for token_id, _ in vocab:
-                token_text = vocab.token_text(token_id)
-                if (
-                    not any(
-                        char in token_text for char in forbidden_characters
-                    )
-                    or token_text == '"'
-                ):
-                    valid_token_ids.add(token_id)
+            valid_token_ids = vocab.string_value_token_ids()
             if not valid_token_ids:
                 raise GrammarError("no valid characters found!")
             return valid_token_ids
         elif self.phase == Phase.EXPECT_FREE_NUMBER_VALUE:
             valid_token_ids = set()
-            for token_id, _ in vocab:
+            candidate_ids: set[int] = set()
+            for char in "0123456789-.":
+                candidate_ids.update(vocab.ids_starting_with(char))
+            for token_id in candidate_ids:
                 token_text = vocab.token_text(token_id)
-                if self._is_valid_number_prefix(
-                    self.progress + vocab.token_text(token_id)
-                ):
+                if self._is_valid_number_prefix(self.progress + token_text):
                     valid_token_ids.add(token_id)
-                elif self.progress != "":
-                    if (
-                        vocab.token_text(token_id) == "}"
-                        and self._all_required_parameters_collected()
-                    ):
-                        valid_token_ids.add(token_id)
-                    elif (
-                        vocab.token_text(token_id) == ","
-                        and not self._all_required_parameters_collected()
-                    ):
-                        valid_token_ids.add(token_id)
+            if any(char.isdigit() for char in self.progress):
+                required = set(
+                    self.registry.get(
+                        self.chosen_function_name
+                    ).required_parameter_names()
+                )
+                would_be_collected = set(self.collected_parameters.keys()) | {
+                    self.current_parameter_name
+                }
+                close_id = vocab.id_of("}")
+                comma_id = vocab.id_of(",")
+                if would_be_collected == required and close_id is not None:
+                    valid_token_ids.add(close_id)
+                elif would_be_collected != required and comma_id is not None:
+                    valid_token_ids.add(comma_id)
             if not valid_token_ids:
                 raise GrammarError("no valid characters found!")
             return valid_token_ids
+        elif self.phase == Phase.EXPECT_FREE_BOOLEAN_VALUE:
+            return self._prefix_match_token_ids(
+                vocab, ["true", "false"], quote=False
+            )
 
     def advance(self, token_id: int, vocab: TokenVocab) -> None:
         if self.phase == Phase.EXPECT_OPEN_BRACE:
@@ -313,6 +318,15 @@ class GenerationState(BaseModel):
                     self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             else:
                 self.progress = self.progress + vocab.token_text(token_id)
+            return
+        elif self.phase == Phase.EXPECT_FREE_BOOLEAN_VALUE:
+            self.progress = self.progress + vocab.token_text(token_id)
+            if self.progress in ["true", "false"]:
+                self.collected_parameters[self.current_parameter_name] = (
+                    self.progress == "true"
+                )
+                self.progress = ""
+                self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             return
 
     def is_done(self) -> bool:

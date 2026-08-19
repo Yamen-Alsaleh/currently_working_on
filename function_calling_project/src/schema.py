@@ -48,6 +48,7 @@ class FunctionRegistry(BaseModel):
 
     @model_validator(mode="after")
     def build_lookup(self) -> "FunctionRegistry":
+        self._by_name = {}
         for f in self.functions:
             if f.name in self._by_name:
                 raise ValueError(f"duplicate function name: {f.name!r}")
