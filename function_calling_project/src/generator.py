@@ -1,25 +1,25 @@
-"""
-TODO:
-    - Given a single prompt string, the loaded model, the vocab lookup, and
-      the function registry:
-        1. Build the initial input ids (encode the prompt + any framing
-           text you decide to use).
-        2. Initialize a fresh grammar state.
-        3. Loop:
-             a. get_logits_from_input_ids(current_input_ids)
-             b. ask the grammar state for the set of valid token ids
-             c. mask all other logits to -inf
-             d. pick the highest-scoring surviving token (argmax)
-             e. append it to current_input_ids
-             f. update the grammar state based on the chosen token
-             g. stop when the grammar state reports the JSON object
-                is complete
-        4. Return the structured result -- likely built directly from the
-           grammar state's "decided" values rather than by re-parsing
-           generated text, per our design discussion.
-    - Consider what "framing text" (if any) precedes the prompt -- and
-      whether it needs to be included in the constrained portion or just
-      as unconstrained context before decoding starts.
-    - Handle errors per-prompt so one bad prompt doesn't crash the whole
-      batch run.
-"""
+from llm_sdk import Small_LLM_Model
+from vocab import TokenVocab
+from schema import FunctionRegistry
+from grammar import GenerationState
+
+
+def generate_function_call(
+    prompt: str,
+    model: Small_LLM_Model,
+    vocab: TokenVocab,
+    registry: FunctionRegistry,
+    max_steps: int = 500,
+) -> dict:
+    tensor = model.encode(prompt)
+    input_ids = tensor[0].tolist()
+    state = GenerationState.start(prompt=prompt, registry=registry)
+    current_step = 0
+    while not state.is_done() and current_step < max_steps:
+        logits = model.get_logits_from_input_ids(input_ids)
+        valid_ids = state.valid_token_ids(vocab)
+        token_id = max(valid_ids, key=lambda i: logits[i])
+        input_ids.append(token_id)
+        state.advance(token_id, vocab)
+        current_step += 1
+    return state.result()
