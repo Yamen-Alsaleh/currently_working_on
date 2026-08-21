@@ -1,6 +1,3 @@
-# ABOUTME: Runs the token-by-token constrained generation loop for a single prompt.
-# ABOUTME: Combines the LLM SDK, vocab lookup, and grammar state machine.
-
 """
 TODO:
     - Given a single prompt string, the loaded model, the vocab lookup, and

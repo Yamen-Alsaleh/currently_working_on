@@ -1,32 +1,3 @@
-"""
-This is the core of the "constrained decoding" requirement.
-
-TODO:
-    - Design a state object that holds (at minimum, per our design discussion):
-        * a fixed reference to the FunctionRegistry (doesn't change during
-          generation)
-        * "scratchpad" data: whatever partial literal is currently being
-          matched (e.g. a JSON key being spelled out, a function name being
-          spelled out, a number being accumulated)
-        * "decided" data: values that have been finalized earlier in this
-          same generation and must be remembered for later (e.g. once
-          "name" is fully decided, which function was chosen -- because
-          that determines what "parameters" must contain)
-        * an explicit notion of "phase" (expecting '{', expecting a key,
-          expecting ':', expecting a value, expecting ',' or '}', done...)
-    - Implement the core method: given the current state, return the set
-      of valid token ids (by consulting the vocab lookup + the registry).
-    - Implement a transition method: given the token id that was actually
-      chosen, update the state (advance the phase, extend the scratchpad,
-      or commit a decided value and reset the scratchpad).
-    - Implement a "is this state complete" check (top-level object closed)
-      to know when to stop generating for a given prompt.
-    - Handle the "number" sub-grammar (digits, optional '-', optional
-      single '.', terminated by ',' or '}') separately from the
-      "literal/enum matching" sub-grammar (keys, function names, string
-      values) used for "prompt", "name", string-typed parameters, etc.
-"""
-
 from enum import Enum
 from pydantic import BaseModel, Field
 from schema import FunctionRegistry
@@ -57,9 +28,7 @@ class GenerationState(BaseModel):
     candidate_menu: list[str] = Field(default_factory=list)
     progress: str
     chosen_function_name: str | None
-    collected_parameters: dict[str, int | str | bool] = Field(
-        default_factory=dict
-    )
+    collected_parameters: dict[str, int | str | bool] = Field(default_factory=dict)
     top_level_key: str | None
     current_parameter_name: str | None
 
@@ -71,9 +40,7 @@ class GenerationState(BaseModel):
         else:
             target_candidates = candidates
         survived_candidate = [
-            cand
-            for cand in target_candidates
-            if cand.startswith(self.progress)
+            cand for cand in target_candidates if cand.startswith(self.progress)
         ]
         remaining_suffix = [
             cand.removeprefix(self.progress) for cand in survived_candidate
@@ -196,8 +163,10 @@ class GenerationState(BaseModel):
                 raise GrammarError("no valid characters found!")
             return valid_token_ids
         elif self.phase == Phase.EXPECT_FREE_BOOLEAN_VALUE:
-            return self._prefix_match_token_ids(
-                vocab, ["true", "false"], quote=False
+            return self._prefix_match_token_ids(vocab, ["true", "false"], quote=False)
+        elif self.phase == Phase.DONE:
+            raise GrammarError(
+                "valid_token_ids called after generation is already DONE"
             )
 
     def advance(self, token_id: int, vocab: TokenVocab) -> None:
@@ -294,9 +263,7 @@ class GenerationState(BaseModel):
             return
         elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
             if vocab.token_text(token_id) == '"':
-                self.collected_parameters[self.current_parameter_name] = (
-                    self.progress
-                )
+                self.collected_parameters[self.current_parameter_name] = self.progress
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             else:
@@ -305,14 +272,14 @@ class GenerationState(BaseModel):
         elif self.phase == Phase.EXPECT_FREE_NUMBER_VALUE:
             if vocab.token_text(token_id) in ",}":
                 if "." in self.progress:
-                    self.collected_parameters[self.current_parameter_name] = (
-                        float(self.progress)
+                    self.collected_parameters[self.current_parameter_name] = float(
+                        self.progress
                     )
                     self.progress = ""
                     self.phase = Phase.EXPECT_COMMA_OR_CLOSE
                 else:
-                    self.collected_parameters[self.current_parameter_name] = (
-                        int(self.progress)
+                    self.collected_parameters[self.current_parameter_name] = int(
+                        self.progress
                     )
                     self.progress = ""
                     self.phase = Phase.EXPECT_COMMA_OR_CLOSE
@@ -328,6 +295,8 @@ class GenerationState(BaseModel):
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             return
+        elif self.phase == Phase.DONE:
+            raise GrammarError("advance called after generation is already DONE")
 
     def is_done(self) -> bool:
         return self.phase == Phase.DONE
@@ -343,9 +312,7 @@ class GenerationState(BaseModel):
             raise GrammarError
 
     @classmethod
-    def start(
-        cls, prompt: str, registry: FunctionRegistry
-    ) -> "GenerationState":
+    def start(cls, prompt: str, registry: FunctionRegistry) -> "GenerationState":
         return cls(
             prompt=prompt,
             registry=registry,
