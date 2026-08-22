@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field
 from schema import FunctionRegistry
 from vocab import TokenVocab
 
+MAX_STRING_VALUE_LENGTH = 100
+MAX_NUMBER_VALUE_LENGTH = 20
+
 
 class Phase(Enum):
     EXPECT_OPEN_BRACE = 1
@@ -31,6 +34,30 @@ class GenerationState(BaseModel):
     collected_parameters: dict[str, int | str | bool] = Field(default_factory=dict)
     top_level_key: str | None
     current_parameter_name: str | None
+
+    def _looks_like_new_key_starting(self) -> bool:
+        return "', '" in self.progress or '", "' in self.progress
+
+    def _mentions_another_parameter_name(self) -> bool:
+        other_names = [
+            name
+            for name in self.registry.get(
+                self.chosen_function_name
+            ).required_parameter_names()
+            if name != self.current_parameter_name
+        ]
+        return any(f"'{name}'" in self.progress for name in other_names)
+
+    def _has_repetition_tail(self, min_chunk: int = 3, repeats: int = 2) -> bool:
+        text = self.progress
+        for chunk_len in range(min_chunk, len(text) // repeats + 1):
+            tail = text[-chunk_len * repeats :]
+            if len(tail) < chunk_len * repeats:
+                continue
+            chunk = tail[:chunk_len]
+            if tail == chunk * repeats:
+                return True
+        return False
 
     def _prefix_match_token_ids(
         self, vocab: TokenVocab, candidates: list[str], quote: bool = True
@@ -131,11 +158,38 @@ class GenerationState(BaseModel):
                     raise GrammarError("',' is not found in vocab")
                 return {comma_id}
         elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
+            if (
+                self._has_repetition_tail()
+                or self._looks_like_new_key_starting()
+                or self._mentions_another_parameter_name()
+                or len(self.progress) >= MAX_STRING_VALUE_LENGTH
+            ):
+                close_id = vocab.id_of('"')
+                if close_id is None:
+                    raise GrammarError('"' + " not found in vocab")
+                return {close_id}
             valid_token_ids = vocab.string_value_token_ids()
             if not valid_token_ids:
                 raise GrammarError("no valid characters found!")
             return valid_token_ids
         elif self.phase == Phase.EXPECT_FREE_NUMBER_VALUE:
+            if len(self.progress) >= MAX_NUMBER_VALUE_LENGTH and any(
+                char.isdigit() for char in self.progress
+            ):
+                required = set(
+                    self.registry.get(
+                        self.chosen_function_name
+                    ).required_parameter_names()
+                )
+                would_be_collected = set(self.collected_parameters.keys()) | {
+                    self.current_parameter_name
+                }
+                close_id = vocab.id_of("}")
+                comma_id = vocab.id_of(",")
+                if would_be_collected == required and close_id is not None:
+                    return {close_id}
+                elif comma_id is not None:
+                    return {comma_id}
             valid_token_ids = set()
             candidate_ids: set[int] = set()
             for char in "0123456789-.":

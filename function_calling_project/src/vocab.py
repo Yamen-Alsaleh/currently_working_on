@@ -63,7 +63,7 @@ class TokenVocab(BaseModel):
     def string_value_token_ids(self) -> set[int]:
         if self._string_value_ids_cache is not None:
             return self._string_value_ids_cache
-        forbidden = ('"', "\\", "\n")
+        forbidden = ('"', "\\", "\n", "{", "}")
         result = set()
         for token_id, _ in self:
             text = self.token_text(token_id)
@@ -83,6 +83,8 @@ class TokenVocab(BaseModel):
         if raw.startswith("Ġ"):
             raw = raw.removeprefix("Ġ")
             raw = " " + raw
+        elif raw == "Ċ":
+            raw = "\n"
         return raw
 
     def id_of(self, raw_token: str) -> int | None:
