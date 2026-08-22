@@ -1,4 +1,5 @@
 from enum import Enum
+import json
 from pydantic import BaseModel, Field
 from schema import FunctionRegistry
 from vocab import TokenVocab
@@ -13,11 +14,12 @@ class Phase(Enum):
     EXPECT_COLON = 3
     EMIT_KNOWN_LITERAL = 4
     EXPECT_ENUM_VALUE = 5
-    EXPECT_FREE_STRING_VALUE = 6
-    EXPECT_FREE_NUMBER_VALUE = 7
-    EXPECT_FREE_BOOLEAN_VALUE = 8
-    EXPECT_COMMA_OR_CLOSE = 9
-    DONE = 10
+    EXPECT_STRING_OPEN_QUOTE = 6
+    EXPECT_FREE_STRING_VALUE = 7
+    EXPECT_FREE_NUMBER_VALUE = 8
+    EXPECT_FREE_BOOLEAN_VALUE = 9
+    EXPECT_COMMA_OR_CLOSE = 10
+    DONE = 11
 
 
 class GrammarError(Exception):
@@ -34,19 +36,6 @@ class GenerationState(BaseModel):
     collected_parameters: dict[str, int | str | bool] = Field(default_factory=dict)
     top_level_key: str | None
     current_parameter_name: str | None
-
-    def _looks_like_new_key_starting(self) -> bool:
-        return "', '" in self.progress or '", "' in self.progress
-
-    def _mentions_another_parameter_name(self) -> bool:
-        other_names = [
-            name
-            for name in self.registry.get(
-                self.chosen_function_name
-            ).required_parameter_names()
-            if name != self.current_parameter_name
-        ]
-        return any(f"'{name}'" in self.progress for name in other_names)
 
     def _has_repetition_tail(self, min_chunk: int = 3, repeats: int = 2) -> bool:
         text = self.progress
@@ -128,7 +117,14 @@ class GenerationState(BaseModel):
         elif self.phase == Phase.EXPECT_ENUM_VALUE:
             return self._prefix_match_token_ids(vocab, self.candidate_menu)
         elif self.phase == Phase.EMIT_KNOWN_LITERAL:
-            return self._prefix_match_token_ids(vocab, [self.prompt])
+            return self._prefix_match_token_ids(
+                vocab, [json.dumps(self.prompt)], quote=False
+            )
+        elif self.phase == Phase.EXPECT_STRING_OPEN_QUOTE:
+            quote_id = vocab.id_of('"')
+            if quote_id is None:
+                raise GrammarError("opening quote not found in vocab")
+            return {quote_id}
         elif self.phase == Phase.EXPECT_COMMA_OR_CLOSE:
             if (
                 self.top_level_key == "parameters"
@@ -160,8 +156,6 @@ class GenerationState(BaseModel):
         elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
             if (
                 self._has_repetition_tail()
-                or self._looks_like_new_key_starting()
-                or self._mentions_another_parameter_name()
                 or len(self.progress) >= MAX_STRING_VALUE_LENGTH
             ):
                 close_id = vocab.id_of('"')
@@ -251,7 +245,7 @@ class GenerationState(BaseModel):
                         self.chosen_function_name
                     ).parameter_type(self.current_parameter_name)
                     if param_type == "string":
-                        self.phase = Phase.EXPECT_FREE_STRING_VALUE
+                        self.phase = Phase.EXPECT_STRING_OPEN_QUOTE
                     elif param_type == "number":
                         self.phase = Phase.EXPECT_FREE_NUMBER_VALUE
                     else:
@@ -282,9 +276,13 @@ class GenerationState(BaseModel):
             return
         elif self.phase == Phase.EMIT_KNOWN_LITERAL:
             self.progress = self.progress + vocab.token_text(token_id)
-            if self.progress == '"' + self.prompt + '"':
+            if self.progress == json.dumps(self.prompt):
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+            return
+        elif self.phase == Phase.EXPECT_STRING_OPEN_QUOTE:
+            self.progress = ""
+            self.phase = Phase.EXPECT_FREE_STRING_VALUE
             return
         elif self.phase == Phase.EXPECT_COMMA_OR_CLOSE:
             if (

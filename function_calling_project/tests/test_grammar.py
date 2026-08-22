@@ -8,7 +8,7 @@ from vocab import TokenVocab
 from grammar import GenerationState, Phase
 
 REAL_VOCAB_PATH = "data/vocab.json"
-REAL_DEFINITIONS_PATH = "data/functions_definition.json"
+REAL_DEFINITIONS_PATH = "data/input/functions_definition.json"
 
 
 @pytest.fixture(scope="module")
@@ -67,9 +67,13 @@ def _run_generation(vocab, registry, prompt, expected, max_steps=500):
             target_key = state.candidate_menu[0]
             hint = '"' + target_key + '"'
         elif phase == Phase.EMIT_KNOWN_LITERAL:
-            hint = '"' + state.prompt + '"'
+            import json
+
+            hint = json.dumps(state.prompt)
         elif phase == Phase.EXPECT_ENUM_VALUE:
             hint = '"' + expected_name + '"'
+        elif phase == Phase.EXPECT_STRING_OPEN_QUOTE:
+            hint = '"'
         elif phase == Phase.EXPECT_COMMA_OR_CLOSE:
             hint = None
         elif phase == Phase.EXPECT_FREE_STRING_VALUE:
