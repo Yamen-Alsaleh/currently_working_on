@@ -1,19 +1,22 @@
 # ABOUTME: Tests for grammar.py -- drives GenerationState token-by-token toward
 # ABOUTME: known correct outputs using an oracle, against the real vocab/schema.
 
+import json
+import string
+
 import pytest
 
-from schema import FunctionRegistry
-from vocab import TokenVocab
-from grammar import GenerationState, Phase
+from src.grammar import GenerationState, Phase
+from src.schema import FunctionRegistry
+from src.vocab import TokenVocab
 
-REAL_VOCAB_PATH = "data/vocab.json"
 REAL_DEFINITIONS_PATH = "data/input/functions_definition.json"
 
 
 @pytest.fixture(scope="module")
 def vocab():
-    return TokenVocab.load(REAL_VOCAB_PATH)
+    characters = string.printable
+    return TokenVocab(raw={char: index for index, char in enumerate(characters)})
 
 
 @pytest.fixture(scope="module")
@@ -67,8 +70,6 @@ def _run_generation(vocab, registry, prompt, expected, max_steps=500):
             target_key = state.candidate_menu[0]
             hint = '"' + target_key + '"'
         elif phase == Phase.EMIT_KNOWN_LITERAL:
-            import json
-
             hint = json.dumps(state.prompt)
         elif phase == Phase.EXPECT_ENUM_VALUE:
             hint = '"' + expected_name + '"'
@@ -184,3 +185,43 @@ def test_registry_can_be_embedded_in_generation_state_without_false_duplicate(
     pydantic to re-run validators on the same instance."""
     state = GenerationState.start(prompt="hello", registry=registry)
     assert state.registry.function_names() == registry.function_names()
+
+
+def test_boolean_parameter_reaches_typed_result(vocab):
+    """Generate a boolean without allowing quoted or numeric values."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_set_enabled",
+                "description": "Set an enabled flag.",
+                "parameters": {"enabled": {"type": "boolean"}},
+                "returns": {"type": "boolean"},
+            }
+        ]
+    )
+    expected = {
+        "prompt": "Enable the feature",
+        "name": "fn_set_enabled",
+        "parameters": {"enabled": True},
+    }
+    _run_generation(vocab, registry, expected["prompt"], expected)
+
+
+def test_function_without_parameters_reaches_empty_object(vocab):
+    """Close the parameters object immediately for a zero-argument call."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_status",
+                "description": "Return status.",
+                "parameters": {},
+                "returns": {"type": "string"},
+            }
+        ]
+    )
+    expected = {
+        "prompt": "Show status",
+        "name": "fn_status",
+        "parameters": {},
+    }
+    _run_generation(vocab, registry, expected["prompt"], expected)

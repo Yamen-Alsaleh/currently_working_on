@@ -1,14 +1,21 @@
+"""Schema-aware state machine used to constrain token generation."""
+
 from enum import Enum
 import json
+from typing import Any
+
 from pydantic import BaseModel, Field
-from schema import FunctionRegistry
-from vocab import TokenVocab
+
+from .schema import FunctionDefinition, FunctionRegistry
+from .vocab import TokenVocab
 
 MAX_STRING_VALUE_LENGTH = 100
 MAX_NUMBER_VALUE_LENGTH = 20
 
 
 class Phase(Enum):
+    """Represent the next syntactic or semantic generation requirement."""
+
     EXPECT_OPEN_BRACE = 1
     EXPECT_KEY = 2
     EXPECT_COLON = 3
@@ -23,24 +30,31 @@ class Phase(Enum):
 
 
 class GrammarError(Exception):
-    pass
+    """Report an impossible or invalid grammar transition."""
 
 
 class GenerationState(BaseModel):
+    """Track constrained decoding progress for one function call."""
+
     prompt: str
     registry: FunctionRegistry
     phase: Phase
     candidate_menu: list[str] = Field(default_factory=list)
     progress: str
     chosen_function_name: str | None
-    collected_parameters: dict[str, int | str | bool] = Field(default_factory=dict)
+    collected_parameters: dict[str, float | int | str | bool] = Field(
+        default_factory=dict
+    )
     top_level_key: str | None
     current_parameter_name: str | None
 
-    def _has_repetition_tail(self, min_chunk: int = 3, repeats: int = 2) -> bool:
+    def _has_repetition_tail(
+        self, min_chunk: int = 3, repeats: int = 2
+    ) -> bool:
+        """Return whether the generated string ends in repeated chunks."""
         text = self.progress
         for chunk_len in range(min_chunk, len(text) // repeats + 1):
-            tail = text[-chunk_len * repeats :]
+            tail = text[-chunk_len * repeats:]
             if len(tail) < chunk_len * repeats:
                 continue
             chunk = tail[:chunk_len]
@@ -51,12 +65,15 @@ class GenerationState(BaseModel):
     def _prefix_match_token_ids(
         self, vocab: TokenVocab, candidates: list[str], quote: bool = True
     ) -> set[int]:
+        """Return tokens that keep at least one exact candidate possible."""
         if quote:
             target_candidates = [f'"{cand}"' for cand in candidates]
         else:
             target_candidates = candidates
         survived_candidate = [
-            cand for cand in target_candidates if cand.startswith(self.progress)
+            cand
+            for cand in target_candidates
+            if cand.startswith(self.progress)
         ]
         remaining_suffix = [
             cand.removeprefix(self.progress) for cand in survived_candidate
@@ -74,12 +91,24 @@ class GenerationState(BaseModel):
         return result
 
     def _all_required_parameters_collected(self) -> bool:
-        required = self.registry.get(
-            self.chosen_function_name
-        ).required_parameter_names()
+        """Return whether every required argument has been collected."""
+        required = self._chosen_function().required_parameter_names()
         return set(self.collected_parameters.keys()) == set(required)
 
+    def _chosen_function(self) -> FunctionDefinition:
+        """Return the selected definition or report an invalid state."""
+        if self.chosen_function_name is None:
+            raise GrammarError("a function must be selected before parameters")
+        return self.registry.get(self.chosen_function_name)
+
+    def _current_parameter(self) -> str:
+        """Return the current parameter name or report an invalid state."""
+        if self.current_parameter_name is None:
+            raise GrammarError("no current parameter is selected")
+        return self.current_parameter_name
+
     def _is_valid_number_prefix(self, candidate: str) -> bool:
+        """Return whether text can still become a JSON number value."""
         if candidate == "":
             return False
         if candidate.__contains__("-") or candidate.__contains__("."):
@@ -102,6 +131,7 @@ class GenerationState(BaseModel):
         return True
 
     def valid_token_ids(self, vocab: TokenVocab) -> set[int]:
+        """Compute token IDs allowed by the current grammar phase."""
         if self.phase == Phase.EXPECT_OPEN_BRACE:
             brace_id = vocab.id_of("{")
             if brace_id is None:
@@ -171,12 +201,10 @@ class GenerationState(BaseModel):
                 char.isdigit() for char in self.progress
             ):
                 required = set(
-                    self.registry.get(
-                        self.chosen_function_name
-                    ).required_parameter_names()
+                    self._chosen_function().required_parameter_names()
                 )
                 would_be_collected = set(self.collected_parameters.keys()) | {
-                    self.current_parameter_name
+                    self._current_parameter()
                 }
                 close_id = vocab.id_of("}")
                 comma_id = vocab.id_of(",")
@@ -194,12 +222,10 @@ class GenerationState(BaseModel):
                     valid_token_ids.add(token_id)
             if any(char.isdigit() for char in self.progress):
                 required = set(
-                    self.registry.get(
-                        self.chosen_function_name
-                    ).required_parameter_names()
+                    self._chosen_function().required_parameter_names()
                 )
                 would_be_collected = set(self.collected_parameters.keys()) | {
-                    self.current_parameter_name
+                    self._current_parameter()
                 }
                 close_id = vocab.id_of("}")
                 comma_id = vocab.id_of(",")
@@ -211,23 +237,32 @@ class GenerationState(BaseModel):
                 raise GrammarError("no valid characters found!")
             return valid_token_ids
         elif self.phase == Phase.EXPECT_FREE_BOOLEAN_VALUE:
-            return self._prefix_match_token_ids(vocab, ["true", "false"], quote=False)
+            return self._prefix_match_token_ids(
+                vocab, ["true", "false"], quote=False
+            )
         elif self.phase == Phase.DONE:
             raise GrammarError(
                 "valid_token_ids called after generation is already DONE"
             )
+        raise GrammarError(f"unsupported generation phase: {self.phase}")
 
     def advance(self, token_id: int, vocab: TokenVocab) -> None:
+        """Consume one valid token and advance the grammar state."""
         if self.phase == Phase.EXPECT_OPEN_BRACE:
             if self.top_level_key == "parameters":
-                self.phase = Phase.EXPECT_KEY
-                function_def = self.registry.get(self.chosen_function_name)
+                function_def = self._chosen_function()
                 param_names = function_def.required_parameter_names()
+                if not param_names:
+                    self.phase = Phase.EXPECT_COMMA_OR_CLOSE
+                    self.current_parameter_name = None
+                    self.progress = ""
+                    return
+                self.phase = Phase.EXPECT_KEY
                 self.candidate_menu = param_names
                 self.progress = ""
                 return
             self.phase = Phase.EXPECT_KEY
-            self.candidate_menu = ["prompt", "name", "parameters"]
+            self.candidate_menu = ["prompt"]
             self.progress = ""
             return
         elif self.phase == Phase.EXPECT_COLON:
@@ -241,9 +276,9 @@ class GenerationState(BaseModel):
                 if self.current_parameter_name is None:
                     self.phase = Phase.EXPECT_OPEN_BRACE
                 else:
-                    param_type = self.registry.get(
-                        self.chosen_function_name
-                    ).parameter_type(self.current_parameter_name)
+                    param_type = self._chosen_function().parameter_type(
+                        self.current_parameter_name
+                    )
                     if param_type == "string":
                         self.phase = Phase.EXPECT_STRING_OPEN_QUOTE
                     elif param_type == "number":
@@ -293,12 +328,17 @@ class GenerationState(BaseModel):
                     self.current_parameter_name = None
                 else:
                     next_param = None
-                    for name in self.registry.get(
-                        self.chosen_function_name
-                    ).required_parameter_names():
+                    required_names = (
+                        self._chosen_function().required_parameter_names()
+                    )
+                    for name in required_names:
                         if name not in self.collected_parameters:
                             next_param = name
                             break
+                    if next_param is None:
+                        raise GrammarError(
+                            "could not select the next parameter"
+                        )
                     self.candidate_menu = [next_param]
                     self.phase = Phase.EXPECT_KEY
                     self.progress = ""
@@ -315,7 +355,9 @@ class GenerationState(BaseModel):
             return
         elif self.phase == Phase.EXPECT_FREE_STRING_VALUE:
             if vocab.token_text(token_id) == '"':
-                self.collected_parameters[self.current_parameter_name] = self.progress
+                self.collected_parameters[self._current_parameter()] = (
+                    self.progress
+                )
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             else:
@@ -324,13 +366,13 @@ class GenerationState(BaseModel):
         elif self.phase == Phase.EXPECT_FREE_NUMBER_VALUE:
             if vocab.token_text(token_id) in ",}":
                 if "." in self.progress:
-                    self.collected_parameters[self.current_parameter_name] = float(
-                        self.progress
+                    self.collected_parameters[self._current_parameter()] = (
+                        float(self.progress)
                     )
                     self.progress = ""
                     self.phase = Phase.EXPECT_COMMA_OR_CLOSE
                 else:
-                    self.collected_parameters[self.current_parameter_name] = int(
+                    self.collected_parameters[self._current_parameter()] = int(
                         self.progress
                     )
                     self.progress = ""
@@ -341,30 +383,38 @@ class GenerationState(BaseModel):
         elif self.phase == Phase.EXPECT_FREE_BOOLEAN_VALUE:
             self.progress = self.progress + vocab.token_text(token_id)
             if self.progress in ["true", "false"]:
-                self.collected_parameters[self.current_parameter_name] = (
+                self.collected_parameters[self._current_parameter()] = (
                     self.progress == "true"
                 )
                 self.progress = ""
                 self.phase = Phase.EXPECT_COMMA_OR_CLOSE
             return
         elif self.phase == Phase.DONE:
-            raise GrammarError("advance called after generation is already DONE")
+            raise GrammarError(
+                "advance called after generation is already DONE"
+            )
+        else:
+            raise GrammarError(f"unsupported generation phase: {self.phase}")
 
     def is_done(self) -> bool:
+        """Return whether the complete function-call object was generated."""
         return self.phase == Phase.DONE
 
-    def result(self) -> dict:
+    def result(self) -> dict[str, Any]:
+        """Return the collected call after generation reaches DONE."""
         if self.is_done():
             return {
                 "prompt": self.prompt,
                 "name": self.chosen_function_name,
                 "parameters": self.collected_parameters,
             }
-        else:
-            raise GrammarError
+        raise GrammarError("result requested before generation completed")
 
     @classmethod
-    def start(cls, prompt: str, registry: FunctionRegistry) -> "GenerationState":
+    def start(
+        cls, prompt: str, registry: FunctionRegistry
+    ) -> "GenerationState":
+        """Create an initial state for a new natural-language prompt."""
         return cls(
             prompt=prompt,
             registry=registry,

@@ -1,4 +1,4 @@
-.PHONY: install run debug clean lint lint-strict
+.PHONY: install run debug test integration clean lint lint-strict
 
 install:
 	uv sync
@@ -12,12 +12,15 @@ debug:
 test:
 	uv run pytest tests/ -v
 
+integration:
+	uv run python -m src
+	uv run python tests/test_generator_full_batch.py
+
 clean:
-	rm -rf __pycache__ src/__pycache__ .mypy_cache .pytest_cache
-	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type d \( -name "__pycache__" -o -name ".mypy_cache" -o -name ".pytest_cache" \) -prune -exec rm -rf {} +
 
 lint:
-	uv run flake8 .
+	uv run flake8 src/
 	uv run mypy . --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
 
 lint-strict:

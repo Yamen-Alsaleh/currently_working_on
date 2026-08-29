@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from schema import FunctionRegistry, SchemaError
+from src.schema import FunctionRegistry, SchemaError
 
 REAL_DEFINITIONS_PATH = "data/input/functions_definition.json"
 
@@ -58,6 +58,13 @@ def test_non_list_json_raises_schema_error(tmp_path):
         FunctionRegistry.load(bad_path)
 
 
+def test_empty_function_list_raises_schema_error(tmp_path):
+    """Require at least one function so model selection is possible."""
+    bad_path = write_json(tmp_path, [])
+    with pytest.raises(SchemaError):
+        FunctionRegistry.load(bad_path)
+
+
 def test_missing_required_key_raises_schema_error(tmp_path):
     bad_path = write_json(tmp_path, [
         {
@@ -88,8 +95,18 @@ def test_invalid_parameter_type_raises_schema_error(tmp_path):
 
 def test_duplicate_function_names_raises_schema_error(tmp_path):
     bad_path = write_json(tmp_path, [
-        {"name": "fn_dup", "description": "d1", "parameters": {}, "returns": {"type": "number"}},
-        {"name": "fn_dup", "description": "d2", "parameters": {}, "returns": {"type": "number"}},
+        {
+            "name": "fn_dup",
+            "description": "d1",
+            "parameters": {},
+            "returns": {"type": "number"},
+        },
+        {
+            "name": "fn_dup",
+            "description": "d2",
+            "parameters": {},
+            "returns": {"type": "number"},
+        },
     ])
 
     with pytest.raises(SchemaError):

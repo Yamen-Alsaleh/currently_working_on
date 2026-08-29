@@ -1,27 +1,33 @@
+"""Validated token vocabulary helpers for constrained decoding."""
+
+import json
 from pathlib import Path
 from typing import Iterator
-from pydantic import BaseModel, PrivateAttr, model_validator, ValidationError
-import json
+
+from pydantic import BaseModel, PrivateAttr, ValidationError, model_validator
 
 
 class VocabError(Exception):
-    pass
+    """Report an invalid vocabulary or an unknown token ID."""
 
 
 class TokenVocab(BaseModel):
+    """Index a tokenizer vocabulary by ID and decoded first character."""
+
     raw: dict[str, int]
     _id_to_token: dict[int, str] = PrivateAttr(default_factory=dict)
     _by_first_char: dict[str, list[int]] = PrivateAttr(default_factory=dict)
     _string_value_ids_cache: set[int] | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
-    def build(self):
+    def build(self) -> "TokenVocab":
+        """Build reverse and first-character indexes after validation."""
         self._id_to_token = {}
-        for token, id in self.raw.items():
-            if id in self._id_to_token:
+        for token, token_id in self.raw.items():
+            if token_id in self._id_to_token:
                 raise ValueError(f"duplicate token: {token!r}")
             else:
-                self._id_to_token[id] = token
+                self._id_to_token[token_id] = token
 
         self._by_first_char = {}
         for token_id in self._id_to_token:
@@ -34,8 +40,9 @@ class TokenVocab(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path) -> "TokenVocab":
+        """Load a tokenizer vocab JSON file."""
         try:
-            with open(path, "r") as file:
+            with open(path, "r", encoding="utf-8") as file:
                 text = file.read()
                 try:
                     parsed = json.loads(text)
@@ -44,7 +51,7 @@ class TokenVocab(BaseModel):
 
                 if not isinstance(parsed, dict):
                     raise VocabError(
-                        f"{path} must contain a JSON array,"
+                        f"{path} must contain a JSON object,"
                         + f" got {type(parsed).__name__}"
                     )
                 try:
@@ -58,14 +65,16 @@ class TokenVocab(BaseModel):
             raise VocabError(f"could not read {path}: {e}") from e
 
     def ids_starting_with(self, char: str) -> list[int]:
+        """Return token IDs whose decoded text begins with char."""
         return self._by_first_char.get(char, [])
 
     def string_value_token_ids(self) -> set[int]:
+        """Return cached IDs safe inside an unescaped JSON string value."""
         if self._string_value_ids_cache is not None:
             return self._string_value_ids_cache
         forbidden = ('"', "\\", "\n", "{", "}")
-        result = set()
-        for token_id, _ in self:
+        result: set[int] = set()
+        for token_id, _token in self.iter_tokens():
             text = self.token_text(token_id)
             if text == '"' or not any(ch in text for ch in forbidden):
                 result.add(token_id)
@@ -73,12 +82,14 @@ class TokenVocab(BaseModel):
         return result
 
     def token_string(self, token_id: int) -> str:
+        """Return the raw tokenizer spelling for an ID."""
         try:
             return self._id_to_token[token_id]
         except KeyError as e:
             raise VocabError(f"unknown token name: {token_id!r}") from e
 
     def token_text(self, token_id: int) -> str:
+        """Convert Qwen whitespace markers to their emitted text."""
         raw = self.token_string(token_id)
         if raw.startswith("Ġ"):
             raw = raw.removeprefix("Ġ")
@@ -88,13 +99,16 @@ class TokenVocab(BaseModel):
         return raw
 
     def id_of(self, raw_token: str) -> int | None:
+        """Return the ID of a raw token, if present."""
         if raw_token in self.raw:
             return self.raw[raw_token]
         else:
             return None
 
     def __len__(self) -> int:
+        """Return the vocabulary size."""
         return len(self._id_to_token)
 
-    def __iter__(self) -> Iterator[tuple[int, str]]:
+    def iter_tokens(self) -> Iterator[tuple[int, str]]:
+        """Iterate over token ID and raw token pairs."""
         return iter(self._id_to_token.items())

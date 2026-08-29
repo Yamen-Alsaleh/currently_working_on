@@ -1,13 +1,8 @@
-# tests/test_generator_full_batch.py -- run manually against the real model
+"""Validate the output produced by the real-model CLI integration run."""
+
 import json
 import re
-import time
-
-from llm_sdk import Small_LLM_Model
-from vocab import TokenVocab
-from schema import FunctionRegistry
-from generator import generate_function_call
-from grammar import GrammarError
+from typing import Any
 
 EXPECTED = {
     "What is the sum of 2 and 3?": ("fn_add_numbers", {"a": 2, "b": 3}),
@@ -63,7 +58,12 @@ EXPECTED_SUBSTITUTIONS = {
 }
 
 
-def is_correct_result(prompt, result, expected_name, expected_parameters):
+def is_correct_result(
+    prompt: str,
+    result: dict[str, Any],
+    expected_name: str,
+    expected_parameters: dict[str, Any],
+) -> bool:
     """Check exact values, or functional equivalence for regex patterns."""
     if result["name"] != expected_name:
         return False
@@ -85,48 +85,59 @@ def is_correct_result(prompt, result, expected_name, expected_parameters):
         return False
     return actual == EXPECTED_SUBSTITUTIONS[prompt]
 
-print("Loading model...")
-model = Small_LLM_Model()
 
-print("Loading vocab...")
-vocab = TokenVocab.load(model.get_path_to_vocab_file())
+def main() -> None:
+    """Validate every generated result without running the model again."""
+    with open(
+        "data/input/function_calling_tests.json",
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        prompts = [entry["prompt"] for entry in json.load(stream)]
 
-print("Loading function registry...")
-registry = FunctionRegistry.load("data/input/functions_definition.json")
+    with open(
+        "data/output/function_calling_results.json",
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        generated: Any = json.load(stream)
 
-with open("data/input/function_calling_tests.json") as f:
-    prompts = [entry["prompt"] for entry in json.load(f)]
+    if not isinstance(generated, list):
+        raise SystemExit("FAIL: output root must be a JSON array")
+    if len(generated) != len(prompts):
+        raise SystemExit(
+            f"FAIL: expected {len(prompts)} results, got {len(generated)}"
+        )
 
-results = []
-total_t0 = time.time()
-for prompt in prompts:
-    t0 = time.time()
-    try:
-        result = generate_function_call(prompt, model, vocab, registry)
-        elapsed = time.time() - t0
+    passed = 0
+    for prompt, result in zip(prompts, generated):
         expected_name, expected_parameters = EXPECTED[prompt]
-        correct = is_correct_result(
-            prompt,
-            result,
-            expected_name,
-            expected_parameters,
+        correct = (
+            isinstance(result, dict)
+            and set(result) == {"prompt", "name", "parameters"}
+            and result.get("prompt") == prompt
+            and is_correct_result(
+                prompt,
+                result,
+                expected_name,
+                expected_parameters,
+            )
         )
         status = "PASS" if correct else "WRONG"
-        print(f"[{elapsed:.2f}s] {status:5s} {prompt!r}")
-        print(f"          -> {result}")
+        print(f"{status:5s} {prompt!r}")
+        print(f"      -> {result}")
         if not correct:
             print(
-                "          expected -> "
-                f"name={expected_name!r}, parameters={expected_parameters!r}"
+                "      expected -> "
+                f"name={expected_name!r}, "
+                f"parameters={expected_parameters!r}"
             )
-        results.append(result if correct else None)
-    except GrammarError as e:
-        elapsed = time.time() - t0
-        print(f"[{elapsed:.2f}s] FAIL {prompt!r}")
-        print(f"          -> {e}")
-        results.append(None)
+        passed += int(correct)
 
-total_elapsed = time.time() - total_t0
-passed = sum(1 for result in results if result is not None)
-print(f"\n{passed}/{len(prompts)} semantically correct")
-print(f"Total time: {total_elapsed:.2f}s")
+    print(f"\n{passed}/{len(prompts)} semantically correct")
+    if passed != len(prompts):
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
