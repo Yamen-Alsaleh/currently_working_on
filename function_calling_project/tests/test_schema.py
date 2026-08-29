@@ -1,5 +1,5 @@
-# ABOUTME: Tests for schema.py -- loading and validating functions_definition.json.
-# ABOUTME: Covers the happy path plus every graceful-failure case the subject requires.
+# ABOUTME: Tests loading and validating functions_definition.json.
+# ABOUTME: Covers success and every graceful-failure case in the subject.
 
 import json
 
@@ -11,14 +11,14 @@ REAL_DEFINITIONS_PATH = "data/input/functions_definition.json"
 
 
 def write_json(tmp_path, data) -> str:
-    """Helper: dump `data` as JSON to a temp file, return its path as a string."""
+    """Dump data as JSON to a temporary file and return its path."""
     path = tmp_path / "functions_definition.json"
     path.write_text(json.dumps(data))
     return str(path)
 
 
 def write_raw(tmp_path, text: str) -> str:
-    """Helper: write raw (possibly invalid) text to a temp file, return its path."""
+    """Write raw test text to a temporary file and return its path."""
     path = tmp_path / "functions_definition.json"
     path.write_text(text)
     return str(path)

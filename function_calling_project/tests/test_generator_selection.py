@@ -1,6 +1,10 @@
 """Unit tests for the generator's greedy token-selection policy."""
 
-from src.generator import _select_known_token_id, _select_token_id
+from src.generator import (
+    _normalize_plain_character_set,
+    _select_known_token_id,
+    _select_token_id,
+)
 from src.grammar import GenerationState, Phase
 from src.schema import FunctionRegistry
 from src.vocab import TokenVocab
@@ -104,3 +108,48 @@ def test_function_choice_is_not_selected_deterministically() -> None:
     state.phase = Phase.EXPECT_ENUM_VALUE
     state.candidate_menu = ["fn_a", "fn_b"]
     assert _select_known_token_id({0, 1, 2}, state, vocab) is None
+
+
+def test_plain_character_list_becomes_regex_class() -> None:
+    """Repair an unquoted list when only its character class matches."""
+    result = {
+        "prompt": "Replace all vowels in 'Programming' with asterisks",
+        "name": "fn_replace",
+        "parameters": {
+            "source_string": "Programming",
+            "regex": "aeiou",
+            "replacement": "*",
+        },
+    }
+    normalized = _normalize_plain_character_set(result["prompt"], result)
+    assert normalized["parameters"]["regex"] == "[aeiou]"
+
+
+def test_literal_regex_remains_unchanged() -> None:
+    """Do not alter a plain pattern that already matches literally."""
+    result = {
+        "prompt": "Replace all cat occurrences with dog",
+        "name": "fn_replace",
+        "parameters": {
+            "source_string": "cat and cat",
+            "regex": "cat",
+            "replacement": "dog",
+        },
+    }
+    normalized = _normalize_plain_character_set(result["prompt"], result)
+    assert normalized["parameters"]["regex"] == "cat"
+
+
+def test_quoted_absent_pattern_remains_literal() -> None:
+    """Respect an explicitly quoted literal even when it has no match."""
+    result = {
+        "prompt": "Replace all 'abc' in 'a b c' with X",
+        "name": "fn_replace",
+        "parameters": {
+            "source_string": "a b c",
+            "regex": "abc",
+            "replacement": "X",
+        },
+    }
+    normalized = _normalize_plain_character_set(result["prompt"], result)
+    assert normalized["parameters"]["regex"] == "abc"

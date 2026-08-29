@@ -20,6 +20,8 @@ def _build_framing_text(prompt: str, registry: FunctionRegistry) -> str:
         "invent text, or write placeholders such as ellipses or 'etc.'.",
         "For regex replacement, source_string is the text being edited, "
         "regex is the matching pattern, and replacement is the new text.",
+        "A regex for alternative characters must use a character class: "
+        "write [aeiou] for vowels, never the plain text aeiou.",
         "Use the shortest regex that matches only the requested text. "
         "Do not add alternatives or unrelated words after the pattern.",
         "Named replacement symbols mean the literal character: for example, "
@@ -153,6 +155,84 @@ def _looks_like_complete_value(state: GenerationState) -> bool:
     return is_replacement and len(value) == 1 and not value.isalnum()
 
 
+def _normalize_plain_character_set(
+    prompt: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Repair a model-emitted character list into a usable regex class.
+
+    A small model can identify a character group while omitting regex
+    brackets. This safeguard applies only when the request asks for all or
+    every occurrence, the pattern is an unquoted alphabetic list, the literal
+    list does not match the source, and its character-class form does match.
+    Literal word, phrase, substring, and quoted patterns remain unchanged.
+    """
+    parameters = result.get("parameters")
+    if not isinstance(parameters, dict):
+        return result
+
+    pattern_name = next(
+        (
+            name
+            for name in parameters
+            if "regex" in name.lower() or "pattern" in name.lower()
+        ),
+        None,
+    )
+    source_name = next(
+        (
+            name
+            for name in ("source_string", "source", "text")
+            if isinstance(parameters.get(name), str)
+        ),
+        None,
+    )
+    if pattern_name is None or source_name is None:
+        return result
+
+    pattern = parameters.get(pattern_name)
+    source = parameters.get(source_name)
+    if (
+        not isinstance(pattern, str)
+        or not isinstance(source, str)
+        or len(pattern) < 2
+        or not pattern.isalpha()
+    ):
+        return result
+
+    lowered_prompt = prompt.lower()
+    asks_for_all = re.search(r"\b(?:all|every)\b", lowered_prompt)
+    asks_for_literal = re.search(
+        r"\b(?:word|phrase|substring)\b",
+        lowered_prompt,
+    )
+    quoted_values = {
+        match.group(2)
+        for match in re.finditer(r"(['\"])(.*?)\1", prompt)
+    }
+    if (
+        asks_for_all is None
+        or asks_for_literal is not None
+        or pattern in quoted_values
+    ):
+        return result
+
+    try:
+        if re.search(pattern, source) is not None:
+            return result
+        character_class = f"[{re.escape(pattern)}]"
+        if re.search(character_class, source) is None:
+            return result
+    except re.error:
+        return result
+
+    normalized = dict(result)
+    normalized_parameters = dict(parameters)
+    normalized_parameters[pattern_name] = character_class
+    normalized["parameters"] = normalized_parameters
+    return normalized
+
+
 def generate_function_call(
     prompt: str,
     model: Small_LLM_Model,
@@ -184,4 +264,5 @@ def generate_function_call(
             "couldn't generate function call for the prompt "
             f'"{prompt}" within max_steps={max_steps}'
         )
-    return state.result()
+    result = state.result()
+    return _normalize_plain_character_set(prompt, result)

@@ -146,6 +146,13 @@ still allowing continuation when its logit is substantially stronger. The
 preference changes only when a string stops; it does not choose its content or
 the function.
 
+For regex parameters, a final behavior-based safeguard handles a narrow small-
+model mistake: emitting an unquoted alphabetic character list instead of a
+character class. The value is wrapped as a class only when the request asks for
+all or every occurrence, the literal pattern does not match the source, its
+character-class form does match, and the prompt did not request a quoted word,
+phrase, or substring. This rule is independent of any specific character list.
+
 ### 5. Collect and serialize
 
 The state machine collects typed Python values and reaches DONE only after every
@@ -166,6 +173,8 @@ extra prose.
   model passes, which is particularly important on CPU-only workstations.
 - Output is collected in memory before writing, so a generation failure cannot
   leave a partially successful result file.
+- Plain character-list regexes are normalized only after behavioral checks;
+  literal, quoted, word, phrase, and already-valid matching patterns are kept.
 - The source uses package-relative imports so the required python -m src command
   works without setting PYTHONPATH.
 - Empty prompt arrays produce an empty JSON array without loading the model.
@@ -199,6 +208,12 @@ Regex values then began correctly but continued with irrelevant alternatives.
 Clearer extraction examples and completion-aware stopping fixed the overrun
 without hardcoding the generated regex.
 
+On CPU, the model sometimes understood a character category but emitted the
+plain list without regex brackets. Prompt wording alone did not reliably change
+that close-logit decision. A general applicability check now distinguishes an
+unmatched character list from a literal pattern and constructs the usable
+character-class form without changing function selection.
+
 Another issue was test quality: the original integration script considered any
 non-crashing generation successful. It now checks function names and parameter
 values. Regex cases are validated through their substitution behavior, allowing
@@ -221,6 +236,7 @@ They cover:
 - vocabulary loading, duplicate IDs, Qwen whitespace markers, and lookup;
 - every grammar value type and state transition;
 - closing-quote selection behavior;
+- plain character-list normalization and literal-pattern preservation;
 - deterministic structural selection without bypassing LLM function choice;
 - output-directory creation and JSON serialization;
 - graceful CLI errors without tracebacks.

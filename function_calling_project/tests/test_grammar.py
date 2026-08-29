@@ -1,5 +1,5 @@
 # ABOUTME: Tests for grammar.py -- drives GenerationState token-by-token toward
-# ABOUTME: known correct outputs using an oracle, against the real vocab/schema.
+# ABOUTME: Uses an oracle to verify known outputs against the vocab and schema.
 
 import json
 import string
@@ -16,7 +16,9 @@ REAL_DEFINITIONS_PATH = "data/input/functions_definition.json"
 @pytest.fixture(scope="module")
 def vocab():
     characters = string.printable
-    return TokenVocab(raw={char: index for index, char in enumerate(characters)})
+    return TokenVocab(
+        raw={char: index for index, char in enumerate(characters)}
+    )
 
 
 @pytest.fixture(scope="module")
@@ -33,13 +35,17 @@ def _oracle_pick(state, vocab, target_text_hint):
     best_len = -1
     for tid in valid_ids:
         text = vocab.token_text(tid)
-        if target_text_hint.startswith(state.progress + text) and len(text) > best_len:
+        if (
+            target_text_hint.startswith(state.progress + text)
+            and len(text) > best_len
+        ):
             best_id = tid
             best_len = len(text)
     if best_id is None:
         raise AssertionError(
             f"No valid token matches hint {target_text_hint!r}; "
-            f"valid texts sample: {[vocab.token_text(t) for t in list(valid_ids)[:10]]}"
+            "valid texts sample: "
+            f"{[vocab.token_text(t) for t in list(valid_ids)[:10]]}"
         )
     return best_id
 
