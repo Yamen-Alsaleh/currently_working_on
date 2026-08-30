@@ -207,8 +207,7 @@ def _normalize_plain_character_set(
         lowered_prompt,
     )
     quoted_values = {
-        match.group(2)
-        for match in re.finditer(r"(['\"])(.*?)\1", prompt)
+        match.group(2) for match in re.finditer(r"(['\"])(.*?)\1", prompt)
     }
     if (
         asks_for_all is None
