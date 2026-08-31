@@ -95,12 +95,15 @@ def main() -> None:
     ) as stream:
         prompts = [entry["prompt"] for entry in json.load(stream)]
 
-    with open(
-        "data/output/function_calling_results.json",
-        "r",
-        encoding="utf-8",
-    ) as stream:
-        generated: Any = json.load(stream)
+    output_path = "data/output/function_calling_results.json"
+    try:
+        with open(output_path, "r", encoding="utf-8") as stream:
+            generated: Any = json.load(stream)
+    except FileNotFoundError as error:
+        raise SystemExit(
+            f"FAIL: {output_path} does not exist because the CLI did not "
+            "finish successfully; fix that error and run it again first"
+        ) from error
 
     if not isinstance(generated, list):
         raise SystemExit("FAIL: output root must be a JSON array")

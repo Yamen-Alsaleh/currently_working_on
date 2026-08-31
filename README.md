@@ -79,7 +79,10 @@ The prompt file must contain a JSON array of objects:
 
 The function-definition file must contain a JSON array. Every function requires
 a name, description, parameters object, and return schema. Supported parameter
-types are number, string, and boolean.
+types are number, integer, string, and boolean. A parameter may also declare an
+`enum` array; generation is then restricted to exactly those predefined values.
+Blank or whitespace-only prompts are rejected with a clear error instead of
+being forced into an unrelated function.
 
 Example result:
 
@@ -99,9 +102,10 @@ Example result:
 ### 1. Validate the inputs
 
 Function definitions are parsed into Pydantic models. The registry rejects
-missing fields, unsupported primitive types, duplicate function names, an empty
-function list, and malformed JSON. The prompt file is separately validated as
-an array containing only objects with a string prompt field.
+missing or extra fields, unsupported primitive types, invalid enum values,
+duplicate function names, an empty function list, and malformed JSON. The
+prompt file is separately validated as an array containing only objects with a
+non-blank string prompt field.
 
 ### 2. Build the model context
 
@@ -121,7 +125,7 @@ phase records what may legally appear next, including:
 - one registered function name;
 - one required parameter name;
 - a string opening quote and string contents;
-- a JSON number or boolean value.
+- a JSON number, integer, boolean, or schema-defined enum value.
 
 At each step, valid_token_ids examines the tokenizer vocabulary and returns only
 token IDs that keep the partial output valid. Exact names and literals use
@@ -135,16 +139,50 @@ generator takes the highest-logit token from the grammar-approved set. The
 function name is therefore selected by the LLM, not by keyword rules or a
 hardcoded lookup.
 
-String values permit only tokens safe inside the JSON string. Number prefixes
-are checked character by character, and boolean generation is limited to true
-or false. Parameter names and types come from the function selected by the
-model.
+String values permit only tokens that keep a valid JSON string possible.
+Escaped quotes, escaped backslashes, Windows paths, and template braces are
+supported. Number prefixes are checked character by character, integer fields
+cannot contain decimals, boolean generation is limited to true or false, and
+enum fields can only produce declared values. Parameter names and types come
+from the function selected by the model.
+
+For extractive string arguments, the grammar discovers general boundaries in
+the request: quoted spans, the suffix after a colon, and Unix or Windows file
+paths. The LLM must begin the value. Once its generated prefix identifies one
+unique prompt span, the decoder emits the remaining exact span with no further
+semantic choice and then forces the closing quote. Leading whitespace and
+tokens that cross a detected boundary are masked unless that whitespace was
+actually part of the prompt span. This both prevents value overrun and avoids
+unnecessary full-model calls for already-known text.
+
+Numeric arguments use the same principle. The grammar collects numeric
+literals from the request without forbidding other schema-valid numbers. After
+an LLM-generated prefix identifies one unique request number, the remaining
+digits are emitted directly. Long decimals therefore require the semantic
+choice and boundary decision rather than one full-model call per token.
+
+Function selection also contains a constrained no-match sentinel. The LLM may
+select it when none of the supplied definitions can satisfy a non-blank
+request; the CLI then reports a clear generation error and writes no invented
+function call. Before generation, meaningful words from the request are
+compared with words from registered function names, descriptions, and parameter
+names. When there is a direct relationship, the synthetic sentinel is omitted
+and the LLM chooses only among real registered functions. When there is no
+relationship, the sentinel remains available with a small confidence margin.
+This relevance check never chooses the function itself; function selection is
+still made from constrained LLM logits.
 
 Completed extracted strings receive a closing-quote preference. This prevents
 the small model from extending a correct value with repetitive prose while
 still allowing continuation when its logit is substantially stronger. The
 preference changes only when a string stops; it does not choose its content or
 the function.
+
+Regex character classes have one additional grammar boundary. After a bare
+class such as `[aeiou]`, only a closing quote or a single-character quantifier
+is allowed. After a quantified class such as `[0-9]+`, only the closing quote
+is legal. Tokens that would cross that boundary and append an alternative are
+masked out, preventing invalid continuations such as `[0-9]+|([0-9]+`.
 
 For regex parameters, a final behavior-based safeguard handles a narrow small-
 model mistake: emitting an unquoted alphabetic character list instead of a
@@ -156,9 +194,11 @@ phrase, or substring. This rule is independent of any specific character list.
 ### 5. Collect and serialize
 
 The state machine collects typed Python values and reaches DONE only after every
-required parameter is present. The CLI serializes the results with the standard
-JSON library, which guarantees valid escaping and prevents trailing commas or
-extra prose.
+required parameter is present. Before output, a Pydantic model and the selected
+function schema verify the exact top-level keys, required parameter set, value
+types, and enum membership. The CLI serializes the results with the standard
+JSON library, which guarantees valid escaping and prevents trailing commas,
+non-finite numbers, or extra prose.
 
 ## Design decisions
 
@@ -178,6 +218,7 @@ extra prose.
 - The source uses package-relative imports so the required python -m src command
   works without setting PYTHONPATH.
 - Empty prompt arrays produce an empty JSON array without loading the model.
+- Empty individual prompts are invalid and never reach function selection.
 - Functions with no parameters are supported and produce an empty parameters
   object.
 
@@ -235,6 +276,8 @@ They cover:
 - malformed, missing, and incorrectly shaped prompt files;
 - vocabulary loading, duplicate IDs, Qwen whitespace markers, and lookup;
 - every grammar value type and state transition;
+- integer, float, enum, escaped quote, backslash, and template string handling;
+- blank-prompt and no-matching-function rejection;
 - closing-quote selection behavior;
 - plain character-list normalization and literal-pattern preservation;
 - deterministic structural selection without bypassing LLM function choice;
@@ -253,6 +296,22 @@ Finally, exercise the exact reviewer command and validate its file:
 
     uv run python -m src
     python -m json.tool data/output/function_calling_results.json
+
+For the supplied moulinette version, the grading command exposed by its CLI is
+`grade_student_answers`:
+
+    cd moulinette
+    uv sync
+    uv run python -m moulinette prepare_exercises --set private
+    cd ..
+    uv run python -m src \
+      --functions_definition moulinette/data/input/functions_definition.json \
+      --input moulinette/data/input/function_calling_tests.json \
+      --output data/output/function_calling_results.json
+    cd moulinette
+    uv run python -m moulinette grade_student_answers \
+      --set private \
+      --student_answer_path ../data/output/function_calling_results.json
 
 ## Resources
 

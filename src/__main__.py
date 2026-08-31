@@ -10,7 +10,13 @@ import time
 from typing import Any, Sequence
 
 from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from .generator import generate_function_call
 from .grammar import GrammarError
@@ -32,6 +38,14 @@ class PromptEntry(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     prompt: str
+
+    @field_validator("prompt")
+    @classmethod
+    def reject_blank_prompt(cls, value: str) -> str:
+        """Reject empty or whitespace-only requests without changing text."""
+        if not value.strip():
+            raise ValueError("prompt must contain at least one character")
+        return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,7 +100,8 @@ def load_prompts(path: Path) -> list[str]:
 
     if not isinstance(raw_data, list):
         raise InputError(
-            f"{path} must contain a JSON array, got {type(raw_data).__name__}"
+            f"{path} must contain a JSON array, "
+            f"got {type(raw_data).__name__}"
         )
 
     adapter: TypeAdapter[list[PromptEntry]] = TypeAdapter(list[PromptEntry])
@@ -111,7 +126,13 @@ def write_results(path: Path, results: list[dict[str, Any]]) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as stream:
-        json.dump(results, stream, ensure_ascii=False, indent=2)
+        json.dump(
+            results,
+            stream,
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+        )
         stream.write("\n")
 
 

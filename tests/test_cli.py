@@ -8,16 +8,16 @@ import pytest
 from src.__main__ import InputError, load_prompts, main, write_results
 
 
-def test_load_prompts_preserves_order_and_empty_strings(
+def test_load_prompts_preserves_order_and_original_text(
     tmp_path: Path,
 ) -> None:
     """Accept a valid prompt array without modifying prompt text."""
     input_path = tmp_path / "input.json"
     input_path.write_text(
-        json.dumps([{"prompt": "hello"}, {"prompt": ""}]),
+        json.dumps([{"prompt": "hello"}, {"prompt": "  keep spaces  "}]),
         encoding="utf-8",
     )
-    assert load_prompts(input_path) == ["hello", ""]
+    assert load_prompts(input_path) == ["hello", "  keep spaces  "]
 
 
 @pytest.mark.parametrize(
@@ -28,6 +28,8 @@ def test_load_prompts_preserves_order_and_empty_strings(
         '[{"wrong_key": "hello"}]',
         '[{"prompt": 42}]',
         '[{"prompt": "hello", "extra": true}]',
+        '[{"prompt": ""}]',
+        '[{"prompt": "   "}]',
     ],
 )
 def test_load_prompts_rejects_invalid_input(
@@ -73,4 +75,39 @@ def test_main_reports_missing_definition_without_traceback(
     captured = capsys.readouterr()
     assert exit_code == 1
     assert captured.err.startswith("error:")
+    assert "Traceback" not in captured.err
+
+
+def test_main_reports_missing_prompt_file_before_loading_model(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject an invalid --input path with a clear non-crashing error."""
+    definitions = tmp_path / "functions.json"
+    definitions.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "fn_test",
+                    "description": "Test.",
+                    "parameters": {},
+                    "returns": {"type": "string"},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    exit_code = main(
+        [
+            "--functions_definition",
+            str(definitions),
+            "--input",
+            str(tmp_path / "missing-prompts.json"),
+            "--output",
+            str(tmp_path / "output.json"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "could not read" in captured.err
     assert "Traceback" not in captured.err

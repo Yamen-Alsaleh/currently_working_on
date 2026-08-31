@@ -88,3 +88,31 @@ def test_unknown_id_raises_vocab_error() -> None:
     vocab = TokenVocab(raw={"a": 0})
     with pytest.raises(VocabError):
         vocab.token_string(99)
+
+
+def test_json_string_tokens_allow_braces_and_valid_escapes() -> None:
+    """Support templates, Windows paths, and escaped embedded quotes."""
+    vocab = TokenVocab(
+        raw={
+            '"': 0,
+            "\\": 1,
+            "{name}": 2,
+            "plain": 3,
+            "\n": 4,
+        }
+    )
+    normal = vocab.string_value_token_ids(escape_pending=False)
+    assert {0, 1, 2, 3}.issubset(normal)
+    assert 4 not in normal
+
+    after_backslash = vocab.string_value_token_ids(escape_pending=True)
+    assert 0 in after_backslash
+    assert 1 in after_backslash
+    assert 2 not in after_backslash
+
+
+def test_invalid_json_escape_token_is_rejected() -> None:
+    """Do not allow a raw regex escape such as backslash-d in JSON text."""
+    vocab = TokenVocab(raw={"d": 0, "\\d": 1})
+    assert vocab.string_token_escape_state(0, True) is None
+    assert 1 not in vocab.string_value_token_ids(False)

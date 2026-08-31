@@ -17,7 +17,9 @@ class TokenVocab(BaseModel):
     raw: dict[str, int]
     _id_to_token: dict[int, str] = PrivateAttr(default_factory=dict)
     _by_first_char: dict[str, list[int]] = PrivateAttr(default_factory=dict)
-    _string_value_ids_cache: set[int] | None = PrivateAttr(default=None)
+    _string_value_ids_cache: dict[bool, set[int]] = PrivateAttr(
+        default_factory=dict
+    )
 
     @model_validator(mode="after")
     def build(self) -> "TokenVocab":
@@ -68,17 +70,53 @@ class TokenVocab(BaseModel):
         """Return token IDs whose decoded text begins with char."""
         return self._by_first_char.get(char, [])
 
-    def string_value_token_ids(self) -> set[int]:
-        """Return cached IDs safe inside an unescaped JSON string value."""
-        if self._string_value_ids_cache is not None:
-            return self._string_value_ids_cache
-        forbidden = ('"', "\\", "\n", "{", "}")
+    @staticmethod
+    def _end_escape_state(
+        text: str,
+        escape_pending: bool,
+    ) -> bool | None:
+        """Return a JSON fragment's ending escape state, or None if invalid."""
+        pending = escape_pending
+        for char in text:
+            if pending:
+                if char not in '"\\/bfnrt':
+                    return None
+                pending = False
+            elif char == "\\":
+                pending = True
+            elif char == '"' or ord(char) < 0x20:
+                return None
+        return pending
+
+    def string_token_escape_state(
+        self,
+        token_id: int,
+        escape_pending: bool,
+    ) -> bool | None:
+        """Check a token as JSON string content and return its end state."""
+        return self._end_escape_state(
+            self.token_text(token_id),
+            escape_pending,
+        )
+
+    def string_value_token_ids(
+        self,
+        escape_pending: bool = False,
+    ) -> set[int]:
+        """Return cached IDs valid in the current JSON string escape state."""
+        cached = self._string_value_ids_cache.get(escape_pending)
+        if cached is not None:
+            return cached
         result: set[int] = set()
         for token_id, _token in self.iter_tokens():
             text = self.token_text(token_id)
-            if text == '"' or not any(ch in text for ch in forbidden):
+            if not text:
+                continue
+            if not escape_pending and text == '"':
                 result.add(token_id)
-        self._string_value_ids_cache = result
+            elif self._end_escape_state(text, escape_pending) is not None:
+                result.add(token_id)
+        self._string_value_ids_cache[escape_pending] = result
         return result
 
     def token_string(self, token_id: int) -> str:

@@ -6,7 +6,12 @@ import string
 
 import pytest
 
-from src.grammar import GenerationState, Phase
+from src.grammar import (
+    NO_MATCH_FUNCTION_NAME,
+    GenerationState,
+    GrammarError,
+    Phase,
+)
 from src.schema import FunctionRegistry
 from src.vocab import TokenVocab
 
@@ -79,13 +84,16 @@ def _run_generation(vocab, registry, prompt, expected, max_steps=500):
             hint = json.dumps(state.prompt)
         elif phase == Phase.EXPECT_ENUM_VALUE:
             hint = '"' + expected_name + '"'
+        elif phase == Phase.EXPECT_PARAMETER_ENUM_VALUE:
+            val = expected_params[state.current_parameter_name]
+            hint = json.dumps(val)
         elif phase == Phase.EXPECT_STRING_OPEN_QUOTE:
             hint = '"'
         elif phase == Phase.EXPECT_COMMA_OR_CLOSE:
             hint = None
         elif phase == Phase.EXPECT_FREE_STRING_VALUE:
             val = expected_params[state.current_parameter_name]
-            hint = val + '"'
+            hint = json.dumps(val, ensure_ascii=False)[1:]
         elif phase == Phase.EXPECT_FREE_NUMBER_VALUE:
             val = expected_params[state.current_parameter_name]
             required = registry.get(expected_name).required_parameter_names()
@@ -110,6 +118,7 @@ def _run_generation(vocab, registry, prompt, expected, max_steps=500):
 
     result = state.result()
     assert result == expected, f"MISMATCH:\n  got={result}\n  exp={expected}"
+    return result
 
 
 # --- Test cases covering every function / value type -----------------
@@ -231,3 +240,211 @@ def test_function_without_parameters_reaches_empty_object(vocab):
         "parameters": {},
     }
     _run_generation(vocab, registry, expected["prompt"], expected)
+
+
+def test_integer_number_and_enum_parameters_reach_typed_result(vocab):
+    """Keep integer values as ints and restrict enum output to its menu."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_install",
+                "description": "Install a firmware release.",
+                "parameters": {
+                    "version": {"type": "integer"},
+                    "firmware": {
+                        "type": "string",
+                        "enum": ["stable", "beta"],
+                    },
+                },
+                "returns": {"type": "boolean"},
+            }
+        ]
+    )
+    expected = {
+        "prompt": "Install version 12 using beta firmware",
+        "name": "fn_install",
+        "parameters": {"version": 12, "firmware": "beta"},
+    }
+    result = _run_generation(vocab, registry, expected["prompt"], expected)
+    assert type(result["parameters"]["version"]) is int
+
+
+def test_number_parameters_are_collected_as_float(vocab):
+    """Match evaluator functions whose number annotations require floats."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_rate",
+                "description": "Set a rate.",
+                "parameters": {"rate": {"type": "number"}},
+                "returns": {"type": "number"},
+            }
+        ]
+    )
+    expected = {
+        "prompt": "Set rate to 3",
+        "name": "fn_rate",
+        "parameters": {"rate": 3.0},
+    }
+    result = _run_generation(vocab, registry, expected["prompt"], expected)
+    assert type(result["parameters"]["rate"]) is float
+
+
+def test_strings_preserve_quotes_backslashes_and_braces(vocab):
+    """Decode valid JSON escapes into exact complex string parameters."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_format",
+                "description": "Format text.",
+                "parameters": {"template": {"type": "string"}},
+                "returns": {"type": "string"},
+            }
+        ]
+    )
+    expected = {
+        "prompt": "Format a quoted Windows template",
+        "name": "fn_format",
+        "parameters": {
+            "template": 'Say "hello" to {name} at C:\\Temp',
+        },
+    }
+    _run_generation(vocab, registry, expected["prompt"], expected)
+
+
+def test_no_matching_function_candidate_raises_clear_error(vocab, registry):
+    """Reject an unmatched request instead of inventing a function call."""
+    state = GenerationState.start(prompt="Tell me a joke", registry=registry)
+    state.phase = Phase.EXPECT_ENUM_VALUE
+    state.candidate_menu = [*registry.function_names(), NO_MATCH_FUNCTION_NAME]
+    target = f'"{NO_MATCH_FUNCTION_NAME}"'
+    with pytest.raises(GrammarError, match="no available function matches"):
+        while True:
+            token_id = _oracle_pick(state, vocab, target)
+            state.advance(token_id, vocab)
+
+
+def test_no_match_candidate_can_be_disabled(vocab, registry):
+    """Exclude the synthetic sentinel for a directly relevant request."""
+    state = GenerationState.start(
+        prompt="Reverse the string 'hello'",
+        registry=registry,
+        allow_no_match=False,
+    )
+    state.phase = Phase.EXPECT_COLON
+    state.top_level_key = "name"
+    colon_id = vocab.id_of(":")
+    assert colon_id is not None
+    state.advance(colon_id, vocab)
+    assert NO_MATCH_FUNCTION_NAME not in state.candidate_menu
+    assert state.candidate_menu == registry.function_names()
+
+
+def _regex_string_state(registry, progress):
+    """Create a state positioned inside the public regex parameter."""
+    state = GenerationState.start(
+        prompt="Replace all numbers with NUMBER",
+        registry=registry,
+    )
+    state.phase = Phase.EXPECT_FREE_STRING_VALUE
+    state.chosen_function_name = "fn_substitute_string_with_regex"
+    state.top_level_key = "parameters"
+    state.current_parameter_name = "regex"
+    state.progress = progress
+    return state
+
+
+def test_quantified_character_class_must_close(vocab, registry):
+    """Disallow alternatives after a complete regex such as [0-9]+."""
+    state = _regex_string_state(registry, "[0-9]+")
+    quote_id = vocab.id_of('"')
+    assert quote_id is not None
+    assert state.valid_token_ids(vocab) == {quote_id}
+
+
+def test_bare_character_class_allows_only_close_or_quantifier(vocab, registry):
+    """Allow [0-9] to close or become [0-9]+, but never add an alternative."""
+    state = _regex_string_state(registry, "[0-9]")
+    valid_text = {
+        vocab.token_text(token_id)
+        for token_id in state.valid_token_ids(vocab)
+    }
+    assert valid_text == {'"', "+", "*", "?"}
+
+
+def test_single_token_cannot_cross_completed_regex_boundary(vocab, registry):
+    """Reject a token that would append text after a quantified class."""
+    extended_vocab = TokenVocab(
+        raw={'"': 0, "[0-9]+|": 1, "[0-9]+": 2}
+    )
+    state = _regex_string_state(registry, "")
+    valid_text = {
+        extended_vocab.token_text(token_id)
+        for token_id in state.valid_token_ids(extended_vocab)
+    }
+    assert "[0-9]+|" not in valid_text
+    assert "[0-9]+" in valid_text
+
+
+def _prompt_span_state(prompt, progress):
+    """Create a free-string state for prompt-boundary tests."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_extract",
+                "description": "Extract text.",
+                "parameters": {"value": {"type": "string"}},
+                "returns": {"type": "string"},
+            }
+        ]
+    )
+    state = GenerationState.start(prompt=prompt, registry=registry)
+    state.phase = Phase.EXPECT_FREE_STRING_VALUE
+    state.chosen_function_name = "fn_extract"
+    state.top_level_key = "parameters"
+    state.current_parameter_name = "value"
+    state.progress = progress
+    return state
+
+
+def test_exact_quoted_prompt_span_must_close(vocab):
+    """Force a quote after an SQL query copied exactly from the request."""
+    query = "INSERT INTO logs VALUES (1, 2, 3)"
+    state = _prompt_span_state(
+        f"Run the query '{query}' on the system database",
+        query,
+    )
+    quote_id = vocab.id_of('"')
+    assert quote_id is not None
+    assert state.valid_token_ids(vocab) == {quote_id}
+
+
+def test_token_cannot_overrun_template_suffix():
+    """Reject a token that crosses the exact suffix after a colon."""
+    vocab = TokenVocab(raw={'"': 0, "!": 1, "! }}": 2})
+    state = _prompt_span_state(
+        "Format template: Hello {user}'s profile!",
+        "Hello {user}'s profile",
+    )
+    valid_text = {
+        vocab.token_text(token_id)
+        for token_id in state.valid_token_ids(vocab)
+    }
+    assert "!" in valid_text
+    assert "! }}" not in valid_text
+
+
+def test_unrequested_leading_space_is_masked_from_file_path():
+    """Prevent a path parameter from acquiring a leading blank."""
+    vocab = TokenVocab(raw={'"': 0, " /home": 1, "/home": 2})
+    state = _prompt_span_state(
+        "Read the file at /home/user/data.json with utf-8 encoding",
+        "",
+    )
+    valid_text = {
+        vocab.token_text(token_id)
+        for token_id in state.valid_token_ids(vocab)
+    }
+    assert " /home" not in valid_text
+    assert "/home" in valid_text
+

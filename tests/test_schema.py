@@ -93,6 +93,74 @@ def test_invalid_parameter_type_raises_schema_error(tmp_path):
         FunctionRegistry.load(bad_path)
 
 
+def test_integer_and_enum_parameter_schemas_are_supported(tmp_path):
+    """Accept evaluator integer fields and constrain declared enum values."""
+    path = write_json(tmp_path, [
+        {
+            "name": "fn_install",
+            "description": "Install a release.",
+            "parameters": {
+                "version": {"type": "integer"},
+                "firmware": {
+                    "type": "string",
+                    "enum": ["stable", "beta"],
+                },
+            },
+            "returns": {"type": "boolean"},
+        }
+    ])
+    registry = FunctionRegistry.load(path)
+    function = registry.get("fn_install")
+    assert function.parameter_type("version") == "integer"
+    assert function.parameter_schema("firmware").enum == ["stable", "beta"]
+
+
+def test_enum_value_must_match_parameter_type(tmp_path):
+    """Reject predefined values whose types contradict the schema."""
+    path = write_json(tmp_path, [
+        {
+            "name": "fn_install",
+            "description": "Install a release.",
+            "parameters": {
+                "firmware": {"type": "string", "enum": [1, 2]},
+            },
+            "returns": {"type": "boolean"},
+        }
+    ])
+    with pytest.raises(SchemaError):
+        FunctionRegistry.load(path)
+
+
+def test_validate_call_rejects_extra_keys_and_wrong_parameter_types():
+    """Check final result shape and values against the selected function."""
+    registry = FunctionRegistry(
+        functions=[
+            {
+                "name": "fn_install",
+                "description": "Install.",
+                "parameters": {
+                    "version": {"type": "integer"},
+                    "firmware": {
+                        "type": "string",
+                        "enum": ["stable", "beta"],
+                    },
+                },
+                "returns": {"type": "boolean"},
+            }
+        ]
+    )
+    with pytest.raises(SchemaError):
+        registry.validate_call(
+            {
+                "prompt": "Install",
+                "name": "fn_install",
+                "parameters": {"version": 1.5, "firmware": "nightly"},
+                "extra": "forbidden",
+            },
+            expected_prompt="Install",
+        )
+
+
 def test_duplicate_function_names_raises_schema_error(tmp_path):
     bad_path = write_json(tmp_path, [
         {
