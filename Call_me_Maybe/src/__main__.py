@@ -100,8 +100,7 @@ def load_prompts(path: Path) -> list[str]:
 
     if not isinstance(raw_data, list):
         raise InputError(
-            f"{path} must contain a JSON array, "
-            f"got {type(raw_data).__name__}"
+            f"{path} must contain a JSON array, got {type(raw_data).__name__}"
         )
 
     adapter: TypeAdapter[list[PromptEntry]] = TypeAdapter(list[PromptEntry])
@@ -196,7 +195,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    except Exception as error:  # defensive boundary required by the subject
+    except Exception as error:
         print(
             f"error: unexpected {type(error).__name__}: {error}",
             file=sys.stderr,
