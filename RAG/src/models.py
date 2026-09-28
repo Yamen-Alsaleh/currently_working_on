@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
+from pathlib import Path
 import uuid
 
 
@@ -41,3 +42,14 @@ class StudentSearchResults(BaseModel):
 class StudentSearchResultsAndAnswers(BaseModel):
     search_results: List[MinimalAnswer]
     k: int
+
+
+class Chunk(BaseModel):
+    chunk_id: int
+    file_path: Path
+    first_character_index: int
+    last_character_index: int
+    text: str
+    symbol_name: str | None = None
+    symbol_type: str | None = None
+    language: str
