@@ -104,9 +104,6 @@ class PythonChunker:
         else:
             first_lineno = node.lineno
 
-        if first_lineno is None:
-            raise ChunkingError(f"node {node!r} has no lineno")
-
         start = offset_map[first_lineno - 1]
         if node.end_lineno is None:
             raise ChunkingError(f"node {node!r} has no end_lineno")

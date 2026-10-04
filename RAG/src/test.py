@@ -1,6 +1,5 @@
 import ast
 from pathlib import Path
-from models import Chunk
 
 
 def chunk_file(file_path: Path):
