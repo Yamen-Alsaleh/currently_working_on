@@ -69,9 +69,9 @@ class PythonChunker:
 
     def _extract_structure(
         self, tree: list[ast.stmt]
-    ) -> list[tuple[str, ast.AST | list[ast.AST]]]:
-        ls: list[tuple[str, ast.AST | list[ast.AST]]] = []
-        pending_ls: list[ast.AST] = []
+    ) -> list[tuple[str, ast.stmt | list[ast.stmt]]]:
+        ls: list[tuple[str, ast.stmt | list[ast.stmt]]] = []
+        pending_ls: list[ast.stmt] = []
         for node in tree:
             if isinstance(node, ast.ClassDef):
                 if pending_ls:
@@ -91,15 +91,15 @@ class PythonChunker:
 
     def _span(
         self,
-        node: ast.stmt
-        | ast.AST
-        | list[ast.AST]
-        | ast.FunctionDef
-        | ast.AsyncFunctionDef
-        | ast.ClassDef,
+        node: ast.stmt,
         offset_map: list[int],
     ) -> tuple[int, int]:
-        if hasattr(node, "decorator_list") and node.decorator_list:
+        if (
+            isinstance(
+                node, (ast.AsyncFunctionDef, ast.FunctionDef, ast.ClassDef)
+            )
+            and node.decorator_list
+        ):
             first_lineno = node.decorator_list[0].lineno
         else:
             first_lineno = node.lineno
@@ -115,14 +115,7 @@ class PythonChunker:
 
     def _process_structure(
         self,
-        structure: tuple[
-            str,
-            ast.AST
-            | list[ast.AST]
-            | ast.FunctionDef
-            | ast.AsyncFunctionDef
-            | ast.ClassDef,
-        ],
+        structure: tuple[str, ast.stmt | list[ast.stmt]],
         source: str,
         offset_map: list[int],
         file_path: Path,
@@ -130,6 +123,8 @@ class PythonChunker:
         result = []
         if structure[0] == "function":
             node = structure[1]
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                raise ChunkingError(f"expected a function node, got {node!r}")
             start, end = self._span(node, offset_map)
             if end - start <= self.max_chunk_size:
                 result.append(
@@ -145,6 +140,8 @@ class PythonChunker:
                 )
         elif structure[0] == "class":
             node = structure[1]
+            if not isinstance(node, ast.ClassDef):
+                raise ChunkingError(f"expected a class node, got {node!r}")
             start, end = self._span(node, offset_map)
             if end - start <= self.max_chunk_size:
                 result.append(
@@ -167,6 +164,10 @@ class PythonChunker:
                 result.extend(internal_result)
         elif structure[0] == "module_level":
             payload = structure[1]
+            if not isinstance(payload, list):
+                raise ChunkingError(
+                    f"expected a list of statements, got {payload!r}"
+                )
             start, _ = self._span(payload[0], offset_map)
             _, end = self._span(payload[-1], offset_map)
             if end - start <= self.max_chunk_size:
