@@ -1,0 +1,902 @@
+# RAG Project - Complete Handoff
+
+## Project Goal
+
+Build a Retrieval-Augmented Generation (RAG) system capable of answering questions about the provided vLLM codebase.
+
+Pipeline:
+
+```text
+Corpus
+  ↓
+Indexing
+  ↓
+Retrieval
+  ↓
+Qwen
+  ↓
+Structured Answer
+```
+
+The retrieval system is the foundation of the project. If retrieval fails, generation will also fail.
+
+---
+
+# Mandatory Technologies
+
+## Python
+
+* Python 3.10+
+
+## Package Management
+
+* uv
+
+## Validation
+
+* Pydantic
+* Use BaseModel and TypeAdapter where appropriate.
+
+Important:
+
+Service classes such as:
+
+```text
+Indexer
+Retriever
+Chunker
+Generator
+```
+
+do NOT need to inherit from BaseModel.
+
+Only data models should use Pydantic.
+
+---
+
+## CLI
+
+Must use:
+
+```text
+Python Fire
+```
+
+Long-running operations should use:
+
+```text
+tqdm
+```
+
+---
+
+## LLM
+
+Required model:
+
+```text
+Qwen/Qwen3-0.6B
+```
+
+---
+
+# High-Level Architecture
+
+```text
+Corpus
+  ↓
+Chunking
+  ↓
+Tokenization
+  ↓
+BM25 Index
+  ↓
+Persistence
+
+User Query
+  ↓
+Tokenization
+  ↓
+BM25 Retrieval
+  ↓
+Top-K Chunks
+  ↓
+Qwen
+  ↓
+Structured Answer
+```
+
+---
+
+# Retrieval Method
+
+Chosen method:
+
+```text
+BM25
+```
+
+Library:
+
+```text
+rank_bm25
+```
+
+Reason:
+
+* Better lexical retrieval than TF-IDF.
+* Includes document length normalization.
+* Commonly used in search systems.
+* Explicitly allowed by subject.
+
+---
+
+# Chunking Philosophy
+
+Primary rule:
+
+```text
+Preserve the largest meaningful structure possible
+while respecting max_chunk_size.
+```
+
+Not:
+
+```text
+Every chunk should be 2000 characters.
+```
+
+Instead:
+
+```text
+Meaningful
++
+Under size limit
+```
+
+---
+
+# Internal Chunk Model
+
+Planned model:
+
+```python
+class Chunk(BaseModel):
+    chunk_id: int
+    file_path: str
+    first_character_index: int
+    last_character_index: int
+    text: str
+    symbol_name: str | None
+    symbol_type: str | None
+    language: str
+```
+
+Examples:
+
+```text
+symbol_type="class"
+symbol_name="LoraManager"
+```
+
+```text
+symbol_type="function"
+symbol_name="load_adapter"
+```
+
+```text
+symbol_type="section"
+symbol_name="Loading Adapters"
+```
+
+---
+
+# Python Chunking Design
+
+Chosen approach:
+
+```text
+AST
+```
+
+Reason:
+
+* Reliable.
+* Understands Python syntax.
+* Easier than regex.
+* Provides structural information.
+
+---
+
+## AST Understanding
+
+AST Tree Example:
+
+```python
+class LoraManager:
+    VERSION = 1
+
+    def load_adapter(self):
+        pass
+
+    def unload_adapter(self):
+        pass
+```
+
+Conceptually becomes:
+
+```text
+Module
+│
+└── ClassDef(LoraManager)
+    │
+    ├── Assign(VERSION)
+    │
+    ├── FunctionDef(load_adapter)
+    │
+    └── FunctionDef(unload_adapter)
+```
+
+Important:
+
+AST is NOT a binary tree.
+
+Nodes can have:
+
+```text
+0 children
+1 child
+many children
+```
+
+---
+
+# How AST Will Be Used
+
+AST is used only for:
+
+```text
+Finding structure
+Finding boundaries
+Finding classes
+Finding functions
+```
+
+Chunk text itself comes from:
+
+```text
+Original source file
+```
+
+We are NOT reconstructing code from AST.
+
+---
+
+# Python Chunking Hierarchy
+
+Algorithm:
+
+```text
+Class
+│
+├── Fits?
+│      YES -> one chunk
+│
+└── NO
+       ↓
+    Split by methods
+```
+
+```text
+Function
+│
+├── Fits?
+│      YES -> one chunk
+│
+└── NO
+       ↓
+    Split further
+```
+
+---
+
+# Important Design Decision
+
+If a class is:
+
+```text
+1800 chars
+```
+
+and:
+
+```text
+max_chunk_size = 2000
+```
+
+Then:
+
+```text
+ONE chunk
+```
+
+We do NOT split methods unnecessarily.
+
+Reason:
+
+Preserves relationships between methods and class context.
+
+---
+
+# Oversized Structures
+
+Example:
+
+```text
+Function = 3500 chars
+Max = 2000 chars
+```
+
+Must split.
+
+Chosen solution:
+
+```text
+Metadata Header
++
+Overlap
+```
+
+Example:
+
+```text
+Function: load_adapter
+Class: LoraManager
+
+<code>
+```
+
+and:
+
+```text
+100 character overlap
+```
+
+Current plan:
+
+```text
+overlap_size configurable
+```
+
+Not hardcoded.
+
+---
+
+# Character Offsets
+
+Subject requires:
+
+```text
+file_path
+first_character_index
+last_character_index
+```
+
+AST provides:
+
+```text
+lineno
+end_lineno
+```
+
+Solution:
+
+```text
+Source File
+    ↓
+Build line → character lookup table
+    ↓
+Convert AST line numbers
+    ↓
+Character offsets
+```
+
+Example:
+
+```text
+abc\n
+12345\n
+hello\n
+```
+
+Line 3 starts at:
+
+```text
+10
+```
+
+---
+
+# Markdown Chunking Design
+
+Strategy:
+
+```text
+Heading
++
+Associated Content
+```
+
+Keep sections together whenever possible.
+
+Example:
+
+```markdown
+## Loading adapters
+
+Use POST /v1/load_lora_adapter
+```
+
+Heading remains inside chunk.
+
+Reason:
+
+Headings carry strong retrieval information.
+
+---
+
+# Tokenization Design
+
+Current plan:
+
+Identifiers contribute multiple searchable terms.
+
+Example:
+
+```text
+load_lora_adapter
+```
+
+Produces:
+
+```text
+load_lora_adapter
+load
+lora
+adapter
+```
+
+Benefits:
+
+Supports both:
+
+```text
+load_lora_adapter
+```
+
+and:
+
+```text
+load adapter
+```
+
+queries.
+
+Implementation still undecided.
+
+---
+
+# Retrieval Pipeline
+
+Indexing:
+
+```text
+Chunks
+    ↓
+Tokenize
+    ↓
+BM25
+```
+
+Retrieval:
+
+```text
+Query
+    ↓
+Tokenize
+    ↓
+BM25 scores
+    ↓
+Sort
+    ↓
+Top-K
+```
+
+---
+
+# Persistence Plan
+
+Persist:
+
+```text
+BM25 Data
++
+Chunk Metadata
++
+Chunk Text
+```
+
+Reason:
+
+BM25 alone does not provide:
+
+```text
+file path
+offsets
+chunk contents
+```
+
+Persistence format still undecided.
+
+---
+
+# Required Subject Models
+
+Implement exactly as specified in subject:
+
+```text
+MinimalSource
+UnansweredQuestion
+AnsweredQuestion
+RagDataset
+MinimalSearchResults
+MinimalAnswer
+StudentSearchResults
+StudentSearchResultsAndAnswer
+```
+
+These are external contract models.
+
+---
+
+# Proposed Project Structure
+
+```text
+src/
+├── __init__.py
+├── __main__.py
+│
+├── models/
+│   ├── chunk.py
+│   ├── dataset.py
+│   ├── answer.py
+│   └── search_results.py
+│
+├── chunkers/
+│   ├── python_chunker.py
+│   └── markdown_chunker.py
+│
+├── indexing/
+│   └── indexer.py
+│
+├── retrieval/
+│   └── retriever.py
+│
+├── generation/
+│   └── generator.py
+│
+├── cli/
+│   └── commands.py
+│
+└── utils/
+    ├── file_utils.py
+    └── text_utils.py
+```
+
+---
+
+# Current Development Roadmap
+
+## Phase 1
+
+Project Skeleton
+
+Tasks:
+
+* Create folder structure.
+* Create empty modules.
+* Configure pyproject.toml.
+* Configure dependencies.
+
+Status:
+
+```text
+NEXT
+```
+
+---
+
+## Phase 2
+
+Subject Models
+
+Tasks:
+
+Implement:
+
+```text
+MinimalSource
+UnansweredQuestion
+AnsweredQuestion
+RagDataset
+MinimalSearchResults
+MinimalAnswer
+StudentSearchResults
+StudentSearchResultsAndAnswer
+```
+
+Status:
+
+```text
+NEXT
+```
+
+---
+
+## Phase 3
+
+Internal Models
+
+Tasks:
+
+Implement:
+
+```text
+Chunk
+```
+
+Potential future models:
+
+```text
+IndexedCorpus
+RetrievedChunk
+```
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 4
+
+CLI Design
+
+Tasks:
+
+Design commands:
+
+```text
+index
+search
+answer
+search_dataset
+answer_dataset
+evaluate
+```
+
+Determine:
+
+```text
+Inputs
+Outputs
+Validation
+```
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 5
+
+Python Chunker
+
+Tasks:
+
+* Read file.
+* Parse AST.
+* Build offset map.
+* Discover structures.
+* Generate chunks.
+* Handle oversized chunks.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 6
+
+Markdown Chunker
+
+Tasks:
+
+* Parse headings.
+* Group sections.
+* Split oversized sections.
+* Generate chunks.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 7
+
+Tokenizer
+
+Tasks:
+
+* Define tokenization rules.
+* Handle identifiers.
+* Normalize text.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 8
+
+BM25 Indexing
+
+Tasks:
+
+* Build corpus.
+* Build BM25 object.
+* Persist index.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 9
+
+Retriever
+
+Tasks:
+
+* Query tokenization.
+* Score computation.
+* Top-K selection.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 10
+
+Generation
+
+Tasks:
+
+* Build prompt.
+* Feed retrieved chunks.
+* Generate structured answer.
+* Validate answer models.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 11
+
+Dataset Commands
+
+Tasks:
+
+Implement:
+
+```text
+search_dataset
+answer_dataset
+```
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 12
+
+Evaluation
+
+Tasks:
+
+Implement:
+
+```text
+evaluate
+```
+
+Metrics:
+
+```text
+Recall@5
+```
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+## Phase 13
+
+Testing & Edge Cases
+
+Must gracefully handle:
+
+```text
+Empty query
+Nonsensical query
+k=0
+Missing files
+Malformed JSON
+```
+
+No unhandled traceback should ever reach the user.
+
+Status:
+
+```text
+PLANNED
+```
+
+---
+
+# Immediate Next Step
+
+The next thing to do is:
+
+```text
+1. Create project structure.
+2. Implement all required Pydantic models from the subject.
+3. Review relationships between models.
+4. Only then begin Python chunker implementation.
+```
+
+This is our current baseline and should be treated as the project's source of truth unless we explicitly decide to change a design later.
+
