@@ -31,7 +31,46 @@ class MarkdownChunker:
             )
         self.overlap_size = overlap_size
 
-    def chunk_file(self, file_path: Path) -> list[Chunk]: ...
+    def chunk_file(self, file_path: Path) -> list[Chunk]:
+        source = self._read_source(file_path)
+        offset_map = self._build_offset_map(source)
+        headings = self._find_headings(source)
+        preamble_span, headings = self._compute_heading_spans(
+            headings, offset_map, len(source)
+        )
+        pre_start, pre_end = preamble_span
+        result = []
+        if pre_end > pre_start:
+            if pre_end - pre_start <= self.max_chunk_size:
+                result.append(
+                    self._create_chunk(
+                        file_path=file_path,
+                        source=source,
+                        start=pre_start,
+                        end=pre_end,
+                        symbol_name="None",
+                        symbol_type="preamble",
+                    )
+                )
+            else:
+                result.extend(
+                    self._split_paragraphs(
+                        pre_start,
+                        pre_end,
+                        source,
+                        "None",
+                        "preamble",
+                        file_path,
+                    )
+                )
+        top_level = self._top_level_indices(headings)
+        for index in top_level:
+            result.extend(
+                self._process_section(
+                    index, headings, source, offset_map, file_path
+                )
+            )
+        return result
 
     def _read_source(self, file_path: Path) -> str:
         try:
@@ -78,6 +117,7 @@ class MarkdownChunker:
                         level=level, title=raw_title, line_number=line_number
                     )
                 )
+            line_number += 1
         return headings
 
     def _compute_heading_spans(
@@ -95,6 +135,8 @@ class MarkdownChunker:
                 if headings[j].level <= headings[i].level:
                     headings[i].end = offset_map[headings[j].line_number - 1]
                     flag = True
+                    break
+                j += 1
             if not flag:
                 headings[i].end = source_len
         return (preamble_span, headings)
@@ -115,11 +157,16 @@ class MarkdownChunker:
         while j < len(headings):
             if (
                 headings[j].start < parent.end
-                and headings[j].level < parent.level
+                and headings[j].level > parent.level
             ):
                 childs_indices.append(j)
+            elif headings[j].level <= parent.level:
+                break
             j += 1
-        return childs_indices
+        if not childs_indices:
+            return []
+        min_level = min(headings[j].level for j in childs_indices)
+        return [j for j in childs_indices if headings[j].level == min_level]
 
     def _process_section(
         self,
@@ -178,12 +225,90 @@ class MarkdownChunker:
         start: int,
         end: int,
         source: str,
-        symbol_name: str | None,
+        symbol_name: str,
         symbol_type: str,
         file_path: Path,
         header: str | None = None,
     ) -> list[Chunk]:
         boundaries = []
+        result = []
+        i = start
+        while i < end - 1:
+            if source[i] == "\n" and source[i + 1] == "\n":
+                boundaries.append(i)
+                i += 2
+            else:
+                i += 1
+        boundaries.append(end)
+        cur = start
+        i = 0
+        last_fit = 0
+        while i < len(boundaries):
+            piece_end = boundaries[i]
+            if len(boundaries) == 1:
+                step = self.max_chunk_size - self.overlap_size
+                while cur < end:
+                    piece_end = min(cur + self.max_chunk_size, end)
+                    result.append(
+                        self._create_chunk(
+                            file_path,
+                            source,
+                            cur,
+                            piece_end,
+                            symbol_name,
+                            symbol_type,
+                        )
+                    )
+                    if piece_end == end:
+                        break
+                    cur += step
+                break
+            if piece_end - cur <= self.max_chunk_size:
+                last_fit = piece_end
+                i += 1
+            else:
+                if last_fit:
+                    result.append(
+                        self._create_chunk(
+                            file_path=file_path,
+                            source=source,
+                            start=cur,
+                            end=last_fit,
+                            symbol_name=symbol_name,
+                            symbol_type=symbol_type,
+                        )
+                    )
+                    cur = max(last_fit - self.overlap_size, start)
+                    last_fit = 0
+                else:
+                    while cur < piece_end:
+                        over_end = min(cur + self.max_chunk_size, piece_end)
+                        result.append(
+                            self._create_chunk(
+                                file_path=file_path,
+                                source=source,
+                                start=cur,
+                                end=over_end,
+                                symbol_name=symbol_name,
+                                symbol_type=symbol_type,
+                            )
+                        )
+                        cur = max(over_end - self.overlap_size, start)
+                        if over_end == piece_end:
+                            break
+                    i += 1
+        if last_fit > cur:
+            result.append(
+                self._create_chunk(
+                    file_path=file_path,
+                    source=source,
+                    start=cur,
+                    end=last_fit,
+                    symbol_name=symbol_name,
+                    symbol_type=symbol_type,
+                )
+            )
+        return result
 
     def _create_chunk(
         self,
