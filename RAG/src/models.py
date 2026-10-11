@@ -52,3 +52,13 @@ class Chunk(BaseModel):
     symbol_name: str | None = None
     symbol_type: str | None = None
     language: str
+
+
+class IndexMetadata(BaseModel):
+    max_chunk_size: int
+    overlap_size: int
+    k1: float
+    b: float
+    corpus_root: str
+    file_count: int
+    chunk_count: int

@@ -94,10 +94,13 @@ def main() -> int:
     for problem in all_problems[:50]:
         print(" -", problem)
     if len(all_problems) > 50:
-        print(f" ... and {len(all_problems) - 50} more (see /tmp/md_problems.txt)")
+        print(
+            f" ... and {len(all_problems) - 50} more (see /tmp/md_problems.txt)"
+        )
 
     return 1 if all_problems else 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
