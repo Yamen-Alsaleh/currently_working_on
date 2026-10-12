@@ -36,7 +36,8 @@ class Indexer:
             raw_dir = Path(os.path.abspath(raw_dir)).relative_to(Path.cwd())
         except ValueError as error:
             raise IndexingError(
-                "raw_dir must be under the current directory; run from the project root"
+                "raw_dir must be under the current directory;"
+                "run from the project root"
             ) from error
 
         files = discover_files(raw_dir)
@@ -72,12 +73,16 @@ class Indexer:
         return len(chunks)
 
     def _resolve_corpus_root(self, raw_dir: Path) -> Path:
-        child_directories = [path for path in raw_dir.iterdir() if path.is_dir()]
+        child_directories = [
+            path for path in raw_dir.iterdir() if path.is_dir()
+        ]
         if len(child_directories) == 1:
             return child_directories[0]
         return raw_dir
 
-    def _chunk_files(self, files: list[Path]) -> tuple[list[Chunk], list[Path]]:
+    def _chunk_files(
+        self, files: list[Path]
+    ) -> tuple[list[Chunk], list[Path]]:
         chunks: list[Chunk] = []
         skipped: list[Path] = []
         for file_path in tqdm(files, desc="Chunking", unit="file"):
@@ -106,7 +111,8 @@ class Indexer:
             ):
                 raise IndexingError(
                     f"invalid chunk in {chunk.file_path}: span {span} "
-                    f"at {chunk.first_character_index}:{chunk.last_character_index}"
+                    f"at {chunk.first_character_index}:"
+                    f"{chunk.last_character_index}"
                 )
 
     def _tokenize_chunks(
