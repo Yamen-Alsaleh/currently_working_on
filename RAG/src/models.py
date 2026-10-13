@@ -53,6 +53,13 @@ class Chunk(BaseModel):
     symbol_type: str | None = None
     language: str
 
+    def to_minimal_source(self) -> MinimalSource:
+        return MinimalSource(
+            file_path=self.file_path.as_posix(),
+            first_character_index=self.first_character_index,
+            last_character_index=self.last_character_index,
+        )
+
 
 class IndexMetadata(BaseModel):
     max_chunk_size: int
