@@ -4,11 +4,11 @@ from pathlib import Path
 from rank_bm25 import BM25Okapi
 from tqdm import tqdm
 
-from file_utils import IndexingError, discover_files, save_index
-from markdown_chunker import MarkdownChunker
-from models import Chunk, IndexMetadata
-from python_chunker import ChunkingError, PythonChunker
-from text_utils import tokenize_chunk
+from .file_utils import IndexingError, discover_files, save_index
+from .markdown_chunker import MarkdownChunker
+from .models import Chunk, IndexMetadata
+from .python_chunker import ChunkingError, PythonChunker
+from .text_utils import tokenize_chunk
 
 
 class Indexer:

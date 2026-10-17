@@ -1,7 +1,7 @@
 import re
 from pathlib import Path
 
-from models import Chunk
+from .models import Chunk
 
 
 _WORD_RE: re.Pattern[str] = re.compile(r"\w+")

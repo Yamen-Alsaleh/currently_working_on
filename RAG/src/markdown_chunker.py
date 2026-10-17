@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import re
-from models import Chunk
-from python_chunker import ChunkingError
+from .models import Chunk
+from .python_chunker import ChunkingError
 from pathlib import Path
 
 

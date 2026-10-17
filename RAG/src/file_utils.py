@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from pydantic import TypeAdapter, ValidationError
-from models import Chunk, IndexMetadata
+from .models import Chunk, IndexMetadata
 from rank_bm25 import BM25Okapi
 import pickle
 

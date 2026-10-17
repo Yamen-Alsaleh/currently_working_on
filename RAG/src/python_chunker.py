@@ -1,6 +1,6 @@
 import ast
 from pathlib import Path
-from models import Chunk
+from .models import Chunk
 
 
 class ChunkingError(Exception):

@@ -1,12 +1,12 @@
 from pathlib import Path
 from typing import Sequence
 from tqdm import tqdm
-from models import Chunk, MinimalSearchResults, UnansweredQuestion
-from file_utils import load_index
-from text_utils import tokenize
+from .models import Chunk, MinimalSearchResults, UnansweredQuestion
+from .file_utils import load_index
+from .text_utils import tokenize
 
 
-class retriever:
+class Retriever:
     def __init__(self, processed_dir: Path) -> None:
         self.chunks, self.bm25, self.meta = load_index(processed_dir)
 
@@ -21,14 +21,14 @@ class retriever:
 
     def _rank(self, query_tokens: list[str], k: int) -> list[int]:
         scores = self.bm25.get_scores(query_tokens)
-        indices = scores.argsort()[::-1]
-        return indices.tolist()[: min(k, len(self.chunks))]
+        indices = (-scores).argsort(kind="stable")
+        return indices[: min(k, len(self.chunks))].tolist()
 
     def search_batch(
         self, questions: Sequence[UnansweredQuestion], k: int
     ) -> list[MinimalSearchResults]:
         result = []
-        for question in tqdm(questions):
+        for question in tqdm(questions, desc="Searching", unit="question"):
             chunks = self.search(question.question, k)
             result.append(
                 MinimalSearchResults(
