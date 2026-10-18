@@ -1,13 +1,17 @@
 from pathlib import Path
+from typing import Any
 from .file_utils import IndexingError
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel
 import sys
+from .models import RagDataset, StudentSearchResults
+from .retriever import Retriever
 from .python_chunker import ChunkingError
 from .indexer import Indexer
 
 DEFAULT_RAW_DIR = "data/raw"
 DEFAULT_PROCESSED_DIR = "data/processed"
 DEFAULT_SEARCH_DIR = "data/output/search_results"
+DEFAULT_ANSWER_DIR = "data/output/search_results_and_answer"
 MAX_ALLOWED_CHUNK_SIZE = 2000
 
 
@@ -21,6 +25,7 @@ EXPECTED_ERRORS = (
     ChunkingError,
     ValidationError,
     OSError,
+    UnicodeDecodeError,
 )
 
 
@@ -46,6 +51,33 @@ def _check_chunk_params(max_chunk_size: int, overlap_size: int) -> None:
         )
 
 
+def _check_k(k: int) -> None:
+    if not isinstance(k, int) or k <= 0:
+        raise CLIError("k must be a positive integer!")
+
+
+def _check_query(query: Any) -> str:
+    q = str(query).strip()
+    if not q:
+        raise CLIError("query must not be empty!")
+    return q
+
+
+def _load_dataset(dataset_path: str) -> RagDataset:
+    path = Path(dataset_path)
+    if path.exists() and path.is_file():
+        data = path.read_text(encoding="utf-8")
+        return RagDataset.model_validate_json(data)
+    raise CLIError(f"dataset file not found: {dataset_path}")
+
+
+def _write_json(directory: str, filename: str, model: BaseModel) -> Path:
+    path = Path(directory)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / filename).write_text(model.model_dump_json(indent=2))
+    return path / filename
+
+
 class CLI:
     def index(
         self,
@@ -69,3 +101,43 @@ class CLI:
         except EXPECTED_ERRORS as error:
             print(f"Error: {error}", file=sys.stderr)
             sys.exit(1)
+
+    def search(
+        self,
+        query: str,
+        k: int = 5,
+        processed_dir: str = DEFAULT_PROCESSED_DIR,
+    ) -> None:
+        try:
+            query = _check_query(query)
+            _check_k(k)
+            chunks = Retriever(Path(processed_dir)).search(query, k)
+            if not chunks:
+                print("no results found!")
+                return
+            for chunk in chunks:
+                source = chunk.to_minimal_source()
+                print(
+                    f"{source.file_path} [{source.first_character_index}"
+                    f" : {source.last_character_index}]"
+                )
+        except EXPECTED_ERRORS as error:
+            raise CLIError() from error
+
+    def search_dataset(
+        self,
+        dataset_path: str,
+        k: int = 10,
+        save_directory: str = DEFAULT_SEARCH_DIR,
+        processed_dir: str = DEFAULT_PROCESSED_DIR,
+    ) -> None:
+        try:
+            _check_k(k)
+            dataset = _load_dataset(dataset_path)
+            retriever = Retriever(Path(processed_dir))
+            results = retriever.search_batch(dataset.rag_questions, k)
+            output = StudentSearchResults(search_results=results, k=k)
+            path = _write_json(save_directory, Path(dataset_path).name, output)
+            print(f"Saved student_search_results to {path}")
+        except EXPECTED_ERRORS as error:
+            raise CLIError() from error
