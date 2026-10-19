@@ -33,14 +33,14 @@ def compute_recall(
     for question in truth.rag_questions:
         if not isinstance(question, AnsweredQuestion) or not question.sources:
             continue
-        result = by_id.get(question.question_id)
-        if result is None:
+        student_result = by_id.get(question.question_id)
+        if student_result is None:
             retrieved: list[MinimalSource] = []
         else:
-            retrieved = result.retrieved_sources[:k]
+            retrieved = student_result.retrieved_sources[:k]
         found = 0
         for correct in question.sources:
-            if any(sources_match(re, correct) for re in retrieved):
+            if any(sources_match(r, correct) for r in retrieved):
                 found += 1
         recalls.append(found / len(question.sources))
     if not recalls:
