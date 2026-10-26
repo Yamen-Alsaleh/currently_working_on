@@ -13,6 +13,7 @@ from .models import (
 from .retriever import Retriever
 from .python_chunker import ChunkingError
 from .indexer import Indexer
+from generator import Generator, GenerationError
 
 DEFAULT_RAW_DIR = "data/raw"
 DEFAULT_PROCESSED_DIR = "data/processed"
@@ -32,6 +33,7 @@ EXPECTED_ERRORS = (
     ValidationError,
     OSError,
     UnicodeDecodeError,
+    GenerationError,
 )
 
 
@@ -177,3 +179,44 @@ class CLI:
         except EXPECTED_ERRORS as error:
             print(f"Error: {error}", file=sys.stderr)
             sys.exit(1)
+
+    def answer(
+        self,
+        query: str,
+        k: int = 5,
+        processed_dir: str = DEFAULT_PROCESSED_DIR,
+    ) -> None:
+        try:
+            query = _check_query(query)
+            _check_k(k)
+            chunks = Retriever(Path(processed_dir)).search(query, k)
+            if not chunks:
+                print("no results found!")
+                return
+            sources = [chunk.to_minimal_source() for chunk in chunks]
+            answer = Generator().generate(query, sources)
+            print(answer)
+            print("Sources:\n")
+            for i, source in enumerate(sources, start=1):
+                first = source.first_character_index
+                last = source.last_character_index
+                path = source.file_path
+                with open(path, "r", encoding="utf-8") as file:
+                    text = file.read()
+                    print(f"Source {i} ({path}): {text[first:last]}\n")
+        except EXPECTED_ERRORS as error:
+            print(f"Error: {error}", file=sys.stderr)
+            sys.exit(1)
+
+    def answer_dataset(
+        self,
+        student_search_results_path: str,
+        save_directory: str = DEFAULT_ANSWER_DIR,
+    ) -> None:
+        student_results = _load_search_results(student_search_results_path)
+        answers = Generator().answer_batch(student_results.search_results)
+        model = StudentSearchResultsAndAnswers(
+            search_results=answers, k=student_results.k
+        )
+        _write_json(save_directory, save_directory, model)
+        print(f"Saved student_search_results_and_answer to {save_directory}")
