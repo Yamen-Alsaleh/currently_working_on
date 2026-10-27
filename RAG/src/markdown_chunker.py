@@ -101,8 +101,10 @@ class MarkdownChunker:
             stripped = line.lstrip()
             if stripped.startswith("```"):
                 in_fence = not in_fence
+                line_number += 1
                 continue
             if in_fence:
+                line_number += 1
                 continue
             level = 0
             if re.match(r"^#{1,6} ", line):

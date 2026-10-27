@@ -13,7 +13,7 @@ from .models import (
 from .retriever import Retriever
 from .python_chunker import ChunkingError
 from .indexer import Indexer
-from generator import Generator, GenerationError
+from .generator import Generator, GenerationError
 
 DEFAULT_RAW_DIR = "data/raw"
 DEFAULT_PROCESSED_DIR = "data/processed"
@@ -175,7 +175,7 @@ class CLI:
             for k in (1, 3, 5, 10):
                 if k <= student_result.k:
                     recall = compute_recall(student_result, truth, k)
-                    print(f"Recall@{k}: {recall:.3f} ({recall * 100:.1f%})")
+                    print(f"Recall@{k}: {recall:.3f} ({recall * 100:.1f}%)")
         except EXPECTED_ERRORS as error:
             print(f"Error: {error}", file=sys.stderr)
             sys.exit(1)
@@ -201,9 +201,7 @@ class CLI:
                 first = source.first_character_index
                 last = source.last_character_index
                 path = source.file_path
-                with open(path, "r", encoding="utf-8") as file:
-                    text = file.read()
-                    print(f"Source {i} ({path}): {text[first:last]}\n")
+                print(f"Source {i} ({path}): [{first}:{last}]\n")
         except EXPECTED_ERRORS as error:
             print(f"Error: {error}", file=sys.stderr)
             sys.exit(1)
@@ -213,10 +211,16 @@ class CLI:
         student_search_results_path: str,
         save_directory: str = DEFAULT_ANSWER_DIR,
     ) -> None:
-        student_results = _load_search_results(student_search_results_path)
-        answers = Generator().answer_batch(student_results.search_results)
-        model = StudentSearchResultsAndAnswers(
-            search_results=answers, k=student_results.k
-        )
-        _write_json(save_directory, save_directory, model)
-        print(f"Saved student_search_results_and_answer to {save_directory}")
+        try:
+            student_results = _load_search_results(student_search_results_path)
+            answers = Generator().answer_batch(student_results.search_results)
+            model = StudentSearchResultsAndAnswers(
+                search_results=answers, k=student_results.k
+            )
+            path = _write_json(
+                save_directory, Path(student_search_results_path).name, model
+            )
+            print(f"Saved student_search_results_and_answer to {path}")
+        except EXPECTED_ERRORS as error:
+            print(f"Error: {error}", file=sys.stderr)
+            sys.exit(1)
