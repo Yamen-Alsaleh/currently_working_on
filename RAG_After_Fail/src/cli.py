@@ -165,7 +165,7 @@ class CLI:
         overlap_size: int = 100,
         raw_dir: str = DEFAULT_RAW_DIR,
         processed_dir: str = DEFAULT_PROCESSED_DIR,
-        k1: float = 1.5,
+        k1: float = 2,
         b: float = 0.75,
     ) -> None:
         """Build and persist a searchable index from the raw corpus.

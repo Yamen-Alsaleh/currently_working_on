@@ -19,7 +19,7 @@ class Indexer:
         self,
         max_chunk_size: int = 2000,
         overlap_size: int = 100,
-        k1: float = 1.5,
+        k1: float = 2,
         b: float = 0.75,
     ) -> None:
         """Configure both chunkers and the BM25 scoring parameters.
@@ -210,4 +210,5 @@ class Indexer:
         """
         if not tokenized:
             raise IndexingError("cannot build BM25 from an empty corpus")
+        print(f"Building BM25 with k1={self.k1}, b={self.b}")
         return BM25Okapi(tokenized, k1=self.k1, b=self.b)
