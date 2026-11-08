@@ -5,7 +5,7 @@ from .models import Chunk, IndexMetadata
 from rank_bm25 import BM25Okapi
 import pickle
 
-INDEXED_EXTENSIONS = frozenset([".py", ".md"])
+INDEXED_EXTENSIONS = frozenset([".py", ".md", ".txt"])
 CHUNKS_FILE = "chunks.json"
 BM25_FILE = "bm25.pkl"
 META_FILE = "meta.json"

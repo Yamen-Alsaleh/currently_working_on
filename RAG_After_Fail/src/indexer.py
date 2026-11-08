@@ -143,6 +143,8 @@ class Indexer:
         """
         if file_path.suffix.lower() == ".py":
             return self._python_chunker.chunk_file(file_path)
+        if file_path.suffix.lower() == ".txt":
+            return self._markdown_chunker.chunk_text_file(file_path)
         return self._markdown_chunker.chunk_file(file_path)
 
     def _assign_ids(self, chunks: list[Chunk]) -> None:

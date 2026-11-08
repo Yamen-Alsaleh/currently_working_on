@@ -93,6 +93,30 @@ class MarkdownChunker:
             )
         return result
 
+    def chunk_text_file(self, file_path: Path) -> list[Chunk]:
+        """Read a plain-text file and split it at paragraph boundaries.
+
+        Args:
+            file_path: Plain-text file to process.
+
+        Returns:
+            Chunks preserving original source offsets.
+        """
+        source = self._read_source(file_path)
+
+        if not source:
+            return []
+
+        return self._split_paragraphs(
+            start=0,
+            end=len(source),
+            source=source,
+            symbol_name="None",
+            symbol_type="text",
+            file_path=file_path,
+            language="text",
+        )
+
     def _read_source(self, file_path: Path) -> str:
         """Read a Markdown file as UTF-8 text.
 
@@ -319,6 +343,7 @@ class MarkdownChunker:
         symbol_type: str,
         file_path: Path,
         header: str | None = None,
+        language: str = "markdown",
     ) -> list[Chunk]:
         """Split oversized Markdown content at paragraph boundaries when
         possible.
@@ -362,6 +387,7 @@ class MarkdownChunker:
                             piece_end,
                             symbol_name,
                             symbol_type,
+                            language=language,
                         )
                     )
                     if piece_end == end:
@@ -381,6 +407,7 @@ class MarkdownChunker:
                             end=last_fit,
                             symbol_name=symbol_name,
                             symbol_type=symbol_type,
+                            language=language,
                         )
                     )
                     cur = max(last_fit - self.overlap_size, start)
@@ -396,6 +423,7 @@ class MarkdownChunker:
                                 end=over_end,
                                 symbol_name=symbol_name,
                                 symbol_type=symbol_type,
+                                language=language,
                             )
                         )
                         cur = max(over_end - self.overlap_size, start)
@@ -411,6 +439,7 @@ class MarkdownChunker:
                     end=last_fit,
                     symbol_name=symbol_name,
                     symbol_type=symbol_type,
+                    language=language,
                 )
             )
         return result
@@ -424,6 +453,7 @@ class MarkdownChunker:
         symbol_name: str,
         symbol_type: str,
         header: str | None = None,
+        language: str = "markdown",
     ) -> Chunk:
         """Create a Markdown Chunk for a source span and its section metadata.
 
@@ -451,5 +481,5 @@ class MarkdownChunker:
             text=body,
             symbol_name=symbol_name,
             symbol_type=symbol_type,
-            language="markdown",
+            language=language,
         )
