@@ -538,15 +538,8 @@ overlapping windows from the top-k).
 
 ### References
 
-- Lewis et al., *Retrieval-Augmented Generation for Knowledge-Intensive NLP
-  Tasks*, 2020: <https://arxiv.org/abs/2005.11401>
-- Robertson and Zaragoza, *The Probabilistic Relevance Framework: BM25 and
-  Beyond*, Foundations and Trends in Information Retrieval, 2009:
-  <https://doi.org/10.1561/1500000019>
 - `rank_bm25` library: <https://github.com/dorianbrown/rank_bm25>
 - Python `ast` module: <https://docs.python.org/3/library/ast.html>
-- CommonMark specification (fenced code blocks, headings):
-  <https://spec.commonmark.org/>
 - Qwen3-0.6B model card: <https://huggingface.co/Qwen/Qwen3-0.6B>
 - Hugging Face Transformers documentation (chat templates, generation):
   <https://huggingface.co/docs/transformers>
@@ -554,9 +547,9 @@ overlapping windows from the top-k).
 - Python Fire: <https://github.com/google/python-fire>
 - uv: <https://docs.astral.sh/uv/>
 - tqdm: <https://tqdm.github.io/>
-- vLLM project and documentation: <https://github.com/vllm-project/vllm>,
-  <https://docs.vllm.ai/>
-- PEP 257, docstring conventions: <https://peps.python.org/pep-0257/>
+- dataclasses in python: <https://www.geeksforgeeks.org/python/data-classes-in-python-an-introduction/>
+- TF-IDF: <https://www.geeksforgeeks.org/machine-learning/understanding-tf-idf-term-frequency-inverse-document-frequency/>
+- BM25: <https://www.geeksforgeeks.org/nlp/what-is-bm25-best-matching-25-algorithm/>
 
 ### How AI was used
 
